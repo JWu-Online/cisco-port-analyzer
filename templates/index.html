@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cisco Port Analyzer</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f4f4f9; padding: 2rem; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { font-size: 1.5rem; margin-top: 0; color: #333; }
+        .form-group { margin-bottom: 1rem; }
+        label { display: block; margin-bottom: 0.5rem; font-weight: 600; color: #555; }
+        input, select { width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { background: #007bff; color: white; padding: 0.75rem 1.5rem; border: none; border-radius: 4px; font-size: 1rem; cursor: pointer; width: 100%; margin-top: 1rem; }
+        button:hover { background: #0056b3; }
+        .error { color: #d9534f; background: #fdf7f7; padding: 1rem; border: 1px solid #d9534f; border-radius: 4px; margin-bottom: 1rem; }
+        .info { color: #31708f; background: #d9edf7; padding: 1rem; border: 1px solid #bce8f1; border-radius: 4px; margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Cisco Port Analyzer</h1>
+        <p style="color: #666; margin-bottom: 1.5rem;">Find physical switch ports that have been inactive for a specific duration and export the results to Excel.</p>
+        
+        {% if error %}
+            <div class="error">{{ error }}</div>
+        {% endif %}
+        
+        {% if info %}
+            <div class="info">{{ info }}</div>
+        {% endif %}
+        
+        <form method="POST" action="/">
+            <div class="form-group">
+                <label for="host">Switch IP or Hostname *</label>
+                <input type="text" id="host" name="host" required placeholder="e.g. 192.168.1.10">
+            </div>
+            
+            <div class="form-group">
+                <label for="protocol">Protocol *</label>
+                <select id="protocol" name="protocol" required>
+                    <option value="telnet">Telnet</option>
+                    <option value="ssh">SSH</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="username">Username *</label>
+                <input type="text" id="username" name="username" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Password *</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="secret">Enable Secret (Optional)</label>
+                <input type="password" id="secret" name="secret" placeholder="Leave blank if not needed">
+            </div>
+            
+            <div class="form-group">
+                <label for="months">Timeframe (Months) *</label>
+                <input type="number" id="months" name="months" required min="1" step="0.5" value="6">
+            </div>
+            
+            <div class="form-group">
+                <label for="query_type">Query Type *</label>
+                <select id="query_type" name="query_type" required>
+                    <option value="inactive">Inactive Ports (No activity in timeframe)</option>
+                    <option value="active">Active Ports (Has activity in timeframe)</option>
+                </select>
+            </div>
+            
+            <button type="submit">Analyze & Download Excel</button>
+        </form>
+    </div>
+</body>
+</html>
