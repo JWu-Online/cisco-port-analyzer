@@ -10,24 +10,30 @@ Ensure you have Python 3.8+ installed.
 
 ## Installation
 
-1. Navigate to the project directory:
+1. Clone or download this project to your computer.
+2. Open a command prompt and navigate to the project directory:
    ```bash
    cd cisco-port-analyzer
    ```
-2. Activate the virtual environment (Windows):
+3. Create a virtual environment (Windows):
+   ```bash
+   python -m venv venv
+   ```
+4. Activate the virtual environment (Windows):
    ```bash
    .\venv\Scripts\activate
    ```
-   (On macOS/Linux: `source venv/bin/activate`)
-3. Install dependencies:
+5. Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
 
 ## Usage: Web Interface (Recommended)
 
-The easiest way to use the tool is via the built-in web server.
+**For Windows Users (The Easy Way):**
+Simply double-click the `RunAnalyzer.bat` file in the project folder. It will automatically start the server and open your web browser for you!
 
+**Manual Startup:**
 1. Start the Flask server:
    ```bash
    python app.py
