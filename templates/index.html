@@ -1,79 +1,157 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cisco Port Analyzer</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f4f4f9; padding: 2rem; }
-        .container { max-width: 600px; margin: 0 auto; background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        h1 { font-size: 1.5rem; margin-top: 0; color: #333; }
-        .form-group { margin-bottom: 1rem; }
-        label { display: block; margin-bottom: 0.5rem; font-weight: 600; color: #555; }
-        input, select { width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        button { background: #007bff; color: white; padding: 0.75rem 1.5rem; border: none; border-radius: 4px; font-size: 1rem; cursor: pointer; width: 100%; margin-top: 1rem; }
-        button:hover { background: #0056b3; }
-        .error { color: #d9534f; background: #fdf7f7; padding: 1rem; border: 1px solid #d9534f; border-radius: 4px; margin-bottom: 1rem; }
-        .info { color: #31708f; background: #d9edf7; padding: 1rem; border: 1px solid #bce8f1; border-radius: 4px; margin-bottom: 1rem; }
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Port Analyzer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Crect x='6' y='12' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='13' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='20' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='6' y='19' width='5' height='4' fill='%234A5662'/%3E%3Crect x='13' y='19' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='20' y='19' width='5' height='4' fill='%23D9822B'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-    <div class="container">
-        <h1>Cisco Port Analyzer</h1>
-        <p style="color: #666; margin-bottom: 1.5rem;">Find physical switch ports that have been inactive for a specific duration and export the results to Excel.</p>
-        
-        {% if error %}
-            <div class="error">{{ error }}</div>
-        {% endif %}
-        
-        {% if info %}
-            <div class="info">{{ info }}</div>
-        {% endif %}
-        
-        <form method="POST" action="/">
-            <div class="form-group">
-                <label for="host">Switch IP or Hostname *</label>
-                <input type="text" id="host" name="host" required placeholder="e.g. 192.168.1.10">
-            </div>
-            
-            <div class="form-group">
-                <label for="protocol">Protocol *</label>
-                <select id="protocol" name="protocol" required>
-                    <option value="telnet">Telnet</option>
-                    <option value="ssh">SSH</option>
-                </select>
-            </div>
-            
-            <div class="form-group">
-                <label for="username">Username *</label>
-                <input type="text" id="username" name="username" required>
-            </div>
-            
-            <div class="form-group">
-                <label for="password">Password *</label>
-                <input type="password" id="password" name="password" required>
-            </div>
-            
-            <div class="form-group">
-                <label for="secret">Enable Secret (Optional)</label>
-                <input type="password" id="secret" name="secret" placeholder="Leave blank if not needed">
-            </div>
-            
-            <div class="form-group">
-                <label for="months">Timeframe (Months) *</label>
-                <input type="number" id="months" name="months" required min="1" step="0.5" value="6">
-            </div>
-            
-            <div class="form-group">
-                <label for="query_type">Query Type *</label>
-                <select id="query_type" name="query_type" required>
-                    <option value="inactive">Inactive Ports (No activity in timeframe)</option>
-                    <option value="active">Active Ports (Has activity in timeframe)</option>
-                </select>
-            </div>
-            
-            <button type="submit">Analyze & Download Excel</button>
-        </form>
+  <header class="topbar">
+    <h1>Port Analyzer</h1>
+    <p>Find switch ports that haven't been used in months, on one switch or all of them.</p>
+  </header>
+
+  <main>
+    <div class="setup">
+      <section class="panel" aria-labelledby="whatTitle">
+        <div class="panel-head">
+          <h2 id="whatTitle">What to check</h2>
+        </div>
+        <label class="field"><span>Switches</span><select id="scope"></select></label>
+        <label class="field"><span>Unused for at least</span>
+          <span class="months"><input id="months" type="number" min="0.5" max="120" step="0.5" aria-label="Months"> months</span>
+        </label>
+        <p class="hint" id="scopeHint"></p>
+      </section>
+
+      <section class="panel" aria-labelledby="runTitle">
+        <div class="panel-head">
+          <h2 id="runTitle">Log in and run</h2>
+          <p>Passwords are only kept in memory for this run, never saved.</p>
+        </div>
+        <div class="login-grid">
+          <label class="field"><span>Username</span><input id="user" autocomplete="username"></label>
+          <label class="field"><span>Password</span><input id="pass" type="password" autocomplete="current-password"></label>
+          <label class="field"><span>Enable password</span><input id="secret" type="password" autocomplete="off" placeholder="Optional"></label>
+        </div>
+        <label class="check" id="sshDifferentRow"><input type="checkbox" id="sshDifferent"> <span>SSH switches use a different login</span></label>
+        <div class="login-grid" id="sshLogin" hidden>
+          <label class="field"><span>SSH username</span><input id="sshUser" autocomplete="off"></label>
+          <label class="field"><span>SSH password</span><input id="sshPass" type="password" autocomplete="off"></label>
+          <label class="field"><span>SSH enable password</span><input id="sshSecret" type="password" autocomplete="off" placeholder="Optional"></label>
+        </div>
+        <div class="actions">
+          <button class="btn primary big" id="runBtn">Check ports</button>
+          <button class="btn" id="stopBtn" hidden>Stop</button>
+        </div>
+        <div class="notice" id="runNotes" hidden></div>
+        <div class="progress" id="progressBox" hidden>
+          <div class="progress-line"><span>Checking switches</span><span id="progressCount" class="mono"></span></div>
+          <div class="bar"><div class="fill" id="progressFill"></div></div>
+        </div>
+        <ol class="log mono" id="log" aria-live="polite"></ol>
+      </section>
     </div>
+
+    <!-- Switches -->
+    <section class="panel switches" aria-labelledby="switchesTitle">
+      <div class="switches-head">
+        <div>
+          <h2 id="switchesTitle">Switch list</h2>
+          <p id="switchSummary" class="hint">None yet.</p>
+        </div>
+        <button class="btn" id="toggleEditor" aria-expanded="false" aria-controls="switchEditor">Edit switches</button>
+      </div>
+
+      <div id="switchEditor" hidden>
+        <p class="editor-intro">List every switch you want to check. The type tells the app which commands to send, and the building lets you check one building at a time. The same list works in Switch Port Finder, so you can import the file you already have.</p>
+        <div class="actions">
+          <label class="btn" for="switchFile">Import a file</label>
+          <input type="file" id="switchFile" accept=".csv,.txt,.tsv" hidden>
+          <button class="btn" id="toggleBulk" aria-expanded="false">Paste a list</button>
+          <button class="btn" id="addSwitch">Add a switch</button>
+          <input id="switchFind" type="search" class="switch-find" placeholder="Find a switch" aria-label="Find a switch in the list">
+        </div>
+        <div class="bulk" id="bulkBox" hidden>
+          <label class="field">
+            <span>One switch per line: address, type, ssh or telnet, location, building. A CSV with a header row works too.</span>
+            <textarea id="bulkText" rows="6" class="mono" spellcheck="false" placeholder="10.99.0.1, cisco_nxos, ssh, Main MDF, M Building&#10;10.99.4.11, cisco_ios, telnet, C3 IDF, C Building&#10;10.99.4.12, S3500, telnet, M2 IDF, M Building&#10;10.99.4.13, 5548P, telnet, B2 IDF, B Building"></textarea>
+          </label>
+          <div class="actions"><button class="btn" id="addBulk">Add these to the list</button></div>
+        </div>
+        <div class="notice" id="switchNotes" hidden></div>
+        <div class="table-wrap switch-wrap">
+          <table class="switch-table">
+            <thead><tr><th>Address</th><th>Type</th><th>Connect with</th><th>Building</th><th>Location</th><th><span class="sr">Actions</span></th></tr></thead>
+            <tbody id="switchRows"></tbody>
+          </table>
+        </div>
+        <datalist id="buildingList"></datalist>
+        <p class="empty" id="switchEmpty">No switches yet. Import a file, paste a list, or add them one at a time.</p>
+        <div class="actions">
+          <button class="btn primary" id="saveSwitches">Save switches</button>
+          <span class="hint" id="switchDirty" hidden>Unsaved changes</span>
+          <span class="hint" id="switchShown"></span>
+        </div>
+
+        <details class="more">
+          <summary>Which type is my switch?</summary>
+          <p>Log into the switch and run <span class="mono">show version</span>, then match the model:</p>
+          <dl class="types" id="typeHelp"></dl>
+        </details>
+        <details class="more">
+          <summary>More settings</summary>
+          <div class="grid-3">
+            <label class="field"><span>New switches connect with</span>
+              <select id="defaultProtocol"><option value="telnet">Telnet</option><option value="ssh">SSH</option></select>
+            </label>
+            <label class="field"><span>Switches at once</span><input id="parallel" type="number" min="1" max="50"></label>
+            <label class="field"><span>Login timeout, seconds</span><input id="timeout" type="number" min="5" max="120"></label>
+          </div>
+          <div class="actions"><button class="btn" id="saveSettings">Save settings</button></div>
+          <div class="notice" id="settingsNotes" hidden></div>
+        </details>
+      </div>
+    </section>
+
+    <!-- Results -->
+    <section class="results" id="results" aria-labelledby="resultsTitle">
+      <div class="results-head">
+        <div>
+          <h2 id="resultsTitle">Results</h2>
+          <p class="hint" id="resultsMeta"></p>
+        </div>
+        <button class="btn" id="downloadBtn" hidden>Download Excel</button>
+      </div>
+      <div id="resultsEmpty" class="empty-big">
+        <p>Each switch you check shows up here, with a light for every port: green if it's in use, dark if it's been unused for the months you picked, amber if the switch can't tell.</p>
+      </div>
+      <div id="resultsBody" hidden>
+        <div class="wall" id="wall" aria-label="Every switch checked, one light per port"></div>
+
+        <div class="filters" role="search" aria-label="Filter ports">
+          <div class="chips" id="filterChips" role="group" aria-label="Show ports"></div>
+          <div class="filter-row">
+            <label class="field compact"><span>Switch</span><select id="switchFilter"></select></label>
+            <label class="field compact"><span>Building</span><select id="buildingFilter"></select></label>
+            <label class="field compact grow"><span>Search</span><input id="search" type="search" placeholder="Port, description, VLAN or reason"></label>
+          </div>
+          <p class="filter-status"><span id="shownCount"></span> <button class="link" id="clearFilters" hidden>Clear filters</button></p>
+        </div>
+
+        <div class="table-wrap">
+          <table class="results-table">
+            <thead><tr id="resultsHead"></tr></thead>
+            <tbody id="resultRows"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="noMatches" hidden>No ports match these filters.</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
 </body>
 </html>
