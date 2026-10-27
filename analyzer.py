@@ -16,7 +16,7 @@ cleared), so a port is only called Inactive when that reaches back far enough.
 Otherwise it's Unsure, with the reason.
 
 Run it from the command line too:
-    python analyzer.py 10.0.4.11 -u admin -t cisco_ios -p telnet -m 6
+    python analyzer.py 10.99.4.11 -u admin -t cisco_ios -p telnet -m 6
     python analyzer.py --list data/switches.csv -u admin -m 6
 """
 

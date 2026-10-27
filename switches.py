@@ -113,7 +113,7 @@ def connect(address, vtype, protocol, login, timeout=20):
 
 
 def prompt_name(conn):
-    """'C311-SW1#' -> 'C311-SW1'; '(S3500-M205) #' -> 'S3500-M205'."""
+    """'C3-SW1#' -> 'C3-SW1'; '(S3500-M2) #' -> 'S3500-M2'."""
     return conn.find_prompt().strip().rstrip("#>").strip().strip("()").strip()
 
 
