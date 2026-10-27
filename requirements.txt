@@ -1,4 +1,9 @@
-netmiko>=4.3.0
-pandas>=2.1.0
-openpyxl>=3.1.0
-flask>=3.0.0
+flask>=3.0,<4
+waitress>=3.0,<4
+netmiko>=4.8,<5
+openpyxl>=3.1,<4
+# Paramiko 4+ dropped the older SSH key exchanges (diffie-hellman-group14-sha1 /
+# group1-sha1) that some older Cisco switches still need. 3.5.1 tries modern
+# algorithms first and only falls back to those when the switch offers nothing else,
+# the same way PuTTY does.
+paramiko>=3.5.1,<4

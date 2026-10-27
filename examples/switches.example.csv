@@ -1,0 +1,5 @@
+address,type,protocol,building,location
+10.99.0.1,cisco_nxos,ssh,M Building,Main MDF
+10.99.4.11,cisco_ios,telnet,C Building,C3 IDF
+10.99.4.12,aruba_mas,telnet,M Building,M2 IDF
+10.99.4.13,dell_powerconnect,telnet,B Building,B2 IDF

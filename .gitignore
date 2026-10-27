@@ -1,11 +1,21 @@
-venv/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-.env
+# Everyone's own data stays on their own computer:
+# switch list, settings, saved reports and debug output live in data/
+data/
+
+# Never commit a report or a switch list by accident
 *.xlsx
+*.csv
+!examples/*.csv
+
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.Python
+.env
+
+# Editors
 .vscode/
 .idea/
