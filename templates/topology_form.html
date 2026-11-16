@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stack topology - Port Analyzer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Crect x='6' y='12' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='13' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='20' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='6' y='19' width='5' height='4' fill='%234A5662'/%3E%3Crect x='13' y='19' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='20' y='19' width='5' height='4' fill='%23D9822B'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="link" href="/">&larr; Port Analyzer</a>
+    <h1>Stack topology</h1>
+    <p>Draw one Cisco stack: every member's ports 1&ndash;48, the VLAN on each port, and whether it's been used.</p>
+  </header>
+
+  <main>
+    <div class="setup">
+      <section class="panel" aria-labelledby="whichTitle">
+        <div class="panel-head"><h2 id="whichTitle">Which stack</h2></div>
+        <label class="field"><span>Stack</span><select id="stack"></select></label>
+        <div class="login-grid" id="manual" hidden>
+          <label class="field"><span>Address</span><input id="address" class="mono" placeholder="10.99.4.11" autocomplete="off"></label>
+          <label class="field"><span>Connect with</span>
+            <select id="protocol"><option value="telnet">Telnet</option><option value="ssh">SSH</option></select>
+          </label>
+        </div>
+        <label class="field"><span>Unused for at least</span>
+          <span class="months"><input id="months" type="number" min="0.5" max="120" step="0.5" aria-label="Months"> months</span>
+        </label>
+        <p class="hint">Only Cisco Catalyst switches and stacks can be drawn. <a class="link" href="/topology/demo">See a made-up example</a></p>
+      </section>
+
+      <section class="panel" aria-labelledby="loginTitle">
+        <div class="panel-head">
+          <h2 id="loginTitle">Log in and draw</h2>
+          <p>Passwords are only kept in memory for this run, never saved.</p>
+        </div>
+        <div class="login-grid">
+          <label class="field"><span>Username</span><input id="user" autocomplete="username"></label>
+          <label class="field"><span>Password</span><input id="pass" type="password" autocomplete="current-password"></label>
+          <label class="field"><span>Enable password</span><input id="secret" type="password" autocomplete="off" placeholder="Optional"></label>
+        </div>
+        <div class="actions">
+          <button class="btn primary big" id="drawBtn">Draw stack</button>
+          <span class="hint" id="working" hidden>Reading the stack. A big one can take a minute…</span>
+        </div>
+        <div class="notice" id="notes" hidden></div>
+      </section>
+    </div>
+
+    <section class="panel" aria-labelledby="recentTitle">
+      <div class="panel-head">
+        <h2 id="recentTitle">Earlier drawings</h2>
+        <p>Saved in your data folder. Each run also remembers what it saw, so a stack that restarted has fewer Unsure ports next time.</p>
+      </div>
+      <ul class="recent" id="recent"></ul>
+      <p class="empty" id="recentEmpty">None yet.</p>
+    </section>
+  </main>
+
+  <script>
+  (function () {
+    "use strict";
+    var $ = function (s) { return document.querySelector(s); };
+    function remember(k, v) { try { localStorage.setItem("pa." + k, v); } catch (e) { /* private window */ } }
+    function recall(k) { try { return localStorage.getItem("pa." + k); } catch (e) { return null; } }
+    function el(tag, props, text) {
+      var e = document.createElement(tag);
+      Object.keys(props || {}).forEach(function (k) { e.setAttribute(k, props[k]); });
+      if (text !== undefined) e.textContent = text;
+      return e;
+    }
+    function notice(kind, messages) {
+      var box = $("#notes");
+      box.textContent = "";
+      if (!messages || !messages.length) { box.hidden = true; return; }
+      box.className = "notice " + kind;
+      messages.forEach(function (m) { box.appendChild(el("p", {}, m)); });
+      box.hidden = false;
+    }
+    async function api(path, body) {
+      var opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+      try {
+        var res = await fetch(path, opts);
+        var data = await res.json();
+        return { ok: res.ok && data.ok !== false, data: data };
+      } catch (e) {
+        return { ok: false, data: { problems: ["Can't reach the app. Is the RunAnalyzer window still open?"] } };
+      }
+    }
+
+    function syncManual() { $("#manual").hidden = $("#stack").value !== "__other"; }
+
+    async function init() {
+      var state = (await api("/api/state")).data;
+      var cisco = (state.switches || []).filter(function (s) { return s.type === "cisco_ios"; });
+      var sel = $("#stack");
+      cisco.sort(function (a, b) {
+        return (a.building + a.location + a.address).localeCompare(b.building + b.location + b.address, undefined, { numeric: true });
+      }).forEach(function (s) {
+        var where = [s.building, s.location].filter(Boolean).join(", ");
+        sel.appendChild(el("option", { value: s.address }, where ? where + " (" + s.address + ")" : s.address));
+      });
+      sel.appendChild(el("option", { value: "__other" }, "Another address…"));
+      var last = recall("topologyStack");
+      sel.value = last && Array.prototype.some.call(sel.options, function (o) { return o.value === last; }) ? last : sel.options[0].value;
+      syncManual();
+      $("#protocol").value = (state.settings && state.settings.default_protocol) || "telnet";
+      $("#months").value = (state.settings && state.settings.months) || 6;
+      $("#user").value = recall("user") || "";
+
+      var pages = (await api("/api/topology/pages")).data.pages || [];
+      $("#recentEmpty").hidden = pages.length > 0;
+      pages.forEach(function (p) {
+        var li = el("li");
+        li.appendChild(el("a", { "class": "link", href: "/topology/page/" + encodeURIComponent(p.file) }, p.name));
+        li.appendChild(el("span", { "class": "hint" }, "  " + p.created));
+        $("#recent").appendChild(li);
+      });
+    }
+
+    async function draw() {
+      var other = $("#stack").value === "__other";
+      var body = {
+        address: other ? $("#address").value.trim() : $("#stack").value,
+        months: $("#months").value,
+        username: $("#user").value, password: $("#pass").value, secret: $("#secret").value
+      };
+      if (other) body.protocol = $("#protocol").value;
+      remember("user", $("#user").value);
+      remember("topologyStack", $("#stack").value);
+      notice("", []);
+      $("#drawBtn").disabled = true;
+      $("#drawBtn").textContent = "Reading…";
+      $("#working").hidden = false;
+      var r = await api("/api/topology", body);
+      $("#drawBtn").disabled = false;
+      $("#drawBtn").textContent = "Draw stack";
+      $("#working").hidden = true;
+      if (!r.ok) { notice("error", r.data.problems || ["Couldn't draw the stack."]); return; }
+      location.href = r.data.url;
+    }
+
+    $("#stack").addEventListener("change", syncManual);
+    $("#drawBtn").addEventListener("click", draw);
+    $("#pass").addEventListener("keydown", function (e) { if (e.key === "Enter") draw(); });
+    init();
+  })();
+  </script>
+</body>
+</html>

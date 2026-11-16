@@ -352,3 +352,10 @@ tbody tr:last-child td { border-bottom: none; }
 @media (max-width: 760px) {
   .grid-3 { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---------- stack topology ---------- */
+.topbar-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+a.link { text-decoration: none; }
+a.link:hover { text-decoration: underline; }
+.topbar > a.link { display: inline-block; margin-bottom: 6px; font-size: 0.9rem; }
+.recent { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
