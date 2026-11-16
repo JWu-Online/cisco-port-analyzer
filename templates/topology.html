@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ data.hostname }} - Stack topology</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Crect x='6' y='12' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='13' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='20' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='6' y='19' width='5' height='4' fill='%234A5662'/%3E%3Crect x='13' y='19' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='20' y='19' width='5' height='4' fill='%23D9822B'/%3E%3C/svg%3E">
+<style>
+  /* Same palette as the Port Analyzer page. The VLAN colors are a colorblind-checked set,
+     stepped for the dark chassis they sit on. */
+  :root {
+    --ink: #1C2833; --ink-2: #44525F; --ink-3: #66737F;
+    --bg: #EEF2F5; --surface: #FFFFFF; --sunken: #F5F7F9;
+    --line: #CDD5DD; --line-soft: #E2E7EC;
+    --action: #1E5AA8; --danger: #B42318; --warn-bg: #FFF4E0;
+    --found: #2E9E4F; --check: #D9822B;
+    --chassis: #2A343E; --chassis-edge: #3A4652; --on-chassis: #C9D2DA; --socket: #9AA6B2;
+    --v1: #3987e5; --v2: #d95926; --v3: #199e70; --v4: #c98500;
+    --v5: #d55181; --v6: #0ca30c; --v7: #9085e9; --v8: #e66767;
+    --v-other: #5B6B7A; --v-trunk: #C9D2DA; --on-trunk: #1C2833;
+    --sans: "Segoe UI", "Segoe UI Variable Text", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono: "Cascadia Mono", "Cascadia Code", Consolas, "SFMono-Regular", Menlo, monospace;
+    --tile-w: 34px; --tile-h: 26px; --gut: 64px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #E3E9EE; --ink-2: #B3BEC8; --ink-3: #8E9AA5;
+      --bg: #141A20; --surface: #1C242C; --sunken: #182027;
+      --line: #34414D; --line-soft: #2A3540;
+      --action: #4A8FE0; --danger: #F2877C; --warn-bg: #3A2E18;
+      --found: #3FBF63; --check: #F0954A;
+      --chassis: #0F1419; --chassis-edge: #26313B;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
+  main { max-width: 1280px; margin: 0 auto; padding: 22px 32px 48px; }
+  h1 { font-size: 1.6rem; font-weight: 600; letter-spacing: -0.01em; margin: 0; line-height: 1.25; }
+  .back { font-size: 0.9rem; color: var(--action); text-decoration: none; font-weight: 600; }
+  .back:hover { text-decoration: underline; }
+  .sub { color: var(--ink-2); margin: 2px 0 18px; }
+  .mono { font-family: var(--mono); font-size: 0.92em; }
+  [hidden] { display: none !important; }
+  :focus-visible { outline: 2px solid var(--action); outline-offset: 2px; }
+
+  /* totals */
+  .totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+  .total { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 6px; padding: 12px 16px; }
+  .total-label { color: var(--ink-2); font-size: 0.88rem; display: flex; align-items: center; gap: 7px; }
+  .total-value { font-size: 1.75rem; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+  .total-note { color: var(--ink-3); font-size: 0.8rem; }
+  .dot { width: 10px; height: 10px; border-radius: 2px; flex: none; display: inline-block; }
+  .dot.active { background: var(--found); }
+  .dot.inactive { border: 1.5px solid var(--ink-3); }
+  .dot.unsure { background: var(--check); }
+  .dot.up { border-radius: 50%; background: var(--found); width: 9px; height: 9px; }
+
+  .notice { background: var(--warn-bg); border-left: 3px solid var(--check); border-radius: 4px;
+            padding: 9px 14px; margin: 0 0 8px; color: var(--ink); }
+
+  /* controls */
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 16px 0 10px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
+  .seg button { font: inherit; font-size: 0.88rem; border: 0; background: transparent; color: var(--ink-2);
+                padding: 6px 14px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-pressed="true"] { background: color-mix(in srgb, var(--action) 10%, var(--surface)); color: var(--ink);
+                                     font-weight: 600; box-shadow: inset 0 -2px 0 var(--action); }
+  .seg-label { color: var(--ink-3); font-size: 0.85rem; }
+  .search { font: inherit; font-size: 0.9rem; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px;
+            background: var(--surface); color: var(--ink); width: 260px; }
+  .btn { font: inherit; font-size: 0.9rem; font-weight: 600; padding: 6px 14px; border: 1px solid var(--line);
+         border-radius: 6px; background: var(--surface); color: var(--ink); cursor: pointer; }
+  .btn:hover { border-color: var(--ink-3); }
+  .spacer { flex: 1; }
+  .shown { color: var(--ink-3); font-size: 0.85rem; }
+
+  /* legend */
+  .legend { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 14px; min-height: 30px; }
+  .chip { display: inline-flex; align-items: center; gap: 7px; font: inherit; font-size: 0.85rem; color: var(--ink-2);
+          background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px 3px 9px; cursor: pointer; }
+  .chip b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .chip[aria-pressed="true"] { border-color: var(--action); color: var(--ink);
+                               box-shadow: inset 0 0 0 1px var(--action); background: color-mix(in srgb, var(--action) 8%, var(--surface)); }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+  .legend-note { color: var(--ink-3); font-size: 0.82rem; margin-left: 4px; }
+  .link { font: inherit; font-size: 0.85rem; background: none; border: none; padding: 0; color: var(--action);
+          cursor: pointer; font-weight: 600; }
+  .link:hover { text-decoration: underline; }
+
+  /* the stack */
+  .stack { position: relative; }
+  .stack.has-gutter .members { margin-left: var(--gut); }
+  #cables { position: absolute; left: 0; top: 0; width: var(--gut); overflow: visible; pointer-events: none; }
+  #cables .cable { fill: none; stroke: var(--ink-2); stroke-width: 2; }
+  #cables .cable-down { stroke: var(--danger); stroke-dasharray: 4 3; }
+  #cables .sp { stroke: var(--bg); stroke-width: 2; pointer-events: all; }
+  #cables .sp-ok { fill: var(--ink-2); }
+  #cables .sp-down { fill: var(--danger); }
+  #cables .sp-x { stroke: #fff; stroke-width: 1.5; }
+  .members { display: grid; gap: 12px; }
+  .member { background: var(--chassis); border: 1px solid var(--chassis-edge); border-radius: 6px;
+            padding: 11px 14px 13px; color: var(--on-chassis); overflow-x: auto; }
+  .member-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 9px; }
+  .member-head h2 { font-size: 0.98rem; margin: 0; color: #fff; font-weight: 600; }
+  .role { font-size: 0.75rem; font-weight: 600; padding: 0 8px; border-radius: 999px; border: 1px solid #5B6B7A; }
+  .role-active { color: #fff; border-color: #C9D2DA; }
+  .member-meta { font-size: 0.84rem; }
+  .member-counts { margin-left: auto; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+  .member-counts b { color: #fff; font-weight: 600; }
+
+  .plate { display: inline-flex; gap: 14px; }
+  .pgroup { display: grid; column-gap: 4px; row-gap: 4px; }
+  .plabel { height: 14px; font-size: 10px; line-height: 14px; color: var(--socket); text-align: center;
+            font-variant-numeric: tabular-nums; display: flex; align-items: center; justify-content: center; gap: 3px; }
+  .led { width: 6px; height: 6px; border-radius: 50%; box-shadow: inset 0 0 0 1px #5B6B7A; }
+  .led-up { background: #3FBF63; box-shadow: none; }
+  .led-err { background: #F2877C; box-shadow: none; }
+  .led-none { visibility: hidden; }
+
+  .port {
+    --fill: transparent; --on: #fff;
+    position: relative; width: var(--tile-w); height: var(--tile-h); border-radius: 3px;
+    background-color: var(--fill); color: var(--on);
+    font-size: 11px; font-weight: 650; line-height: var(--tile-h); text-align: center;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em; white-space: nowrap; overflow: hidden;
+    cursor: default; transition: opacity .12s;
+  }
+  [data-color="activity"] .port[data-act="active"] { --fill: var(--found); --on: #fff; }
+  [data-color="activity"] .port[data-act="unsure"] { --fill: var(--check); --on: #1C2833; }
+  [data-color="vlan"] .port[data-slot="1"] { --fill: var(--v1); }
+  [data-color="vlan"] .port[data-slot="2"] { --fill: var(--v2); }
+  [data-color="vlan"] .port[data-slot="3"] { --fill: var(--v3); }
+  [data-color="vlan"] .port[data-slot="4"] { --fill: var(--v4); }
+  [data-color="vlan"] .port[data-slot="5"] { --fill: var(--v5); }
+  [data-color="vlan"] .port[data-slot="6"] { --fill: var(--v6); }
+  [data-color="vlan"] .port[data-slot="7"] { --fill: var(--v7); }
+  [data-color="vlan"] .port[data-slot="8"] { --fill: var(--v8); }
+  [data-color="vlan"] .port[data-slot="other"] { --fill: var(--v-other); }
+  [data-color="vlan"] .port[data-slot="trunk"],
+  [data-color="vlan"] .port[data-slot="routed"] { --fill: var(--v-trunk); --on: var(--on-trunk); }
+  /* Inactive = an empty socket, like the main page */
+  .port[data-act="inactive"] { background-color: transparent; color: var(--on-chassis); box-shadow: inset 0 0 0 1.5px var(--socket); }
+  [data-color="vlan"] .port[data-act="inactive"] { box-shadow: inset 0 0 0 2px var(--fill); }
+  .port[data-act="unsure"] { background-image: repeating-linear-gradient(45deg, rgba(0,0,0,.2) 0 2px, transparent 2px 6px); }
+  .port.shut::after { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .8;
+    background: linear-gradient(to top right, transparent calc(50% - 1px), var(--on-chassis) calc(50% - 1px),
+                var(--on-chassis) calc(50% + 1px), transparent calc(50% + 1px)); }
+  .port.err { box-shadow: inset 0 0 0 2px #F2877C !important; }
+  .port.absent { box-shadow: inset 0 0 0 1px var(--chassis-edge); }
+  .port.dim { opacity: .15; }
+  .port:not(.absent):hover, .port:focus-visible { outline: 2px solid #7DB2F0; outline-offset: 1px; z-index: 1; }
+
+  .key-row { color: var(--ink-3); font-size: 0.82rem; margin: 10px 0 0; display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+  .stack.has-gutter + .key-row { margin-left: var(--gut); }
+  .key-row span { display: inline-flex; align-items: center; gap: 6px; }
+  .key-row i { display: inline-block; width: 18px; border-top: 2px solid var(--ink-2); }
+  .key-row i.down { border-top: 2px dashed var(--danger); }
+  .key-row .led { box-shadow: inset 0 0 0 1px var(--ink-3); }
+
+  /* table */
+  .table-wrap { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 4px; overflow: auto; max-height: 75vh; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--sunken); color: var(--ink-2); font-weight: 600; font-size: 0.85rem;
+       cursor: pointer; user-select: none; }
+  th[aria-sort="ascending"]::after { content: " \25B4"; }
+  th[aria-sort="descending"]::after { content: " \25BE"; }
+  td.note { white-space: normal; min-width: 240px; color: var(--ink-2); font-size: 0.85rem; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .result-cell { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; font-size: 0.85rem; }
+
+  /* tooltip */
+  #tip { position: fixed; z-index: 10; max-width: 320px; pointer-events: none; background: var(--surface); color: var(--ink);
+         border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 24px rgba(0,0,0,.18); padding: 10px 12px; font-size: 0.85rem; }
+  .tip-head { display: flex; align-items: baseline; gap: 8px; }
+  .tip-head strong { font-family: var(--mono); font-size: 0.95rem; }
+  .tip-sub { color: var(--ink-3); font-size: 0.8rem; }
+  .tip-desc { color: var(--ink-2); }
+  #tip dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 6px 0 0; }
+  #tip dt { color: var(--ink-3); }
+  #tip dd { margin: 0; font-weight: 600; }
+  #tip dd.soft { font-weight: 400; color: var(--ink-2); }
+
+  details.how { margin-top: 22px; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 6px;
+                padding: 12px 18px; color: var(--ink-2); }
+  details.how summary { cursor: pointer; color: var(--ink); font-weight: 600; }
+  details.how ol { padding-left: 20px; }
+  .foot { color: var(--ink-3); font-size: 0.8rem; margin-top: 14px; }
+  @media (max-width: 760px) { main { padding: 16px; } .totals { grid-template-columns: repeat(2, minmax(0, 1fr)); } .search { width: 100%; } }
+</style>
+</head>
+<body>
+<main id="root" data-color="activity">
+  <a class="back" href="/topology" id="back" hidden>&larr; Stack topology</a>
+  <h1>{{ data.hostname }}</h1>
+  <p class="sub">
+    {{ data.members|length }} member{{ '' if data.members|length == 1 else 's' }} · ports 1–48 ·
+    {% if data.where %}{{ data.where }} · {% endif %}<span class="mono">{{ data.host }}</span> ·
+    checked {{ data.generated }}
+  </p>
+
+  <div class="totals">
+    <div class="total"><div class="total-label"><span class="dot active"></span>Active</div>
+      <div class="total-value">{{ data.summary.active }}</div><div class="total-note">used in the last {{ '%g'|format(data.months) }} months</div></div>
+    <div class="total"><div class="total-label"><span class="dot inactive"></span>Inactive</div>
+      <div class="total-value">{{ data.summary.inactive }}</div><div class="total-note">unused for {{ '%g'|format(data.months) }}+ months</div></div>
+    <div class="total"><div class="total-label"><span class="dot unsure"></span>Unsure</div>
+      <div class="total-value">{{ data.summary.unsure }}</div><div class="total-note">the switch can't tell yet</div></div>
+    <div class="total"><div class="total-label"><span class="dot up"></span>Link up now</div>
+      <div class="total-value">{{ data.summary.up_now }}</div><div class="total-note">of {{ data.summary.total }} ports</div></div>
+  </div>
+
+  {% for w in data.warnings %}<p class="notice">{{ w }}</p>{% endfor %}
+
+  <div class="controls">
+    <div class="seg" role="group" aria-label="View">
+      <button type="button" data-view="plate" aria-pressed="true">Front panels</button>
+      <button type="button" data-view="table" aria-pressed="false">Table</button>
+    </div>
+    <span class="seg-label">Color by</span>
+    <div class="seg" role="group" aria-label="Color by">
+      <button type="button" data-color="activity" aria-pressed="true">Use</button>
+      <button type="button" data-color="vlan" aria-pressed="false">VLAN</button>
+    </div>
+    <input class="search" id="q" type="search" placeholder="Port, VLAN or description" aria-label="Search ports">
+    <span class="spacer"></span>
+    <span class="shown" id="shown"></span>
+    <button type="button" class="btn" id="csv">Download CSV</button>
+  </div>
+  <div class="legend" id="legend"></div>
+
+  <div id="plate-view">
+    <div class="stack" id="stack">
+      <svg id="cables" aria-hidden="true"></svg>
+      <div class="members" id="members"></div>
+    </div>
+    <div class="key-row">
+      <span class="cable-only"><i></i>stack cable</span>
+      <span class="cable-only"><i class="down"></i>stack port down</span>
+      <span>Lights: <span class="led led-up"></span> link up now <span class="led led-err"></span> err-disabled <span class="led"></span> no link</span>
+      <span>Diagonal line = shut down</span>
+    </div>
+  </div>
+  <div id="table-view" hidden>
+    <div class="table-wrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+  </div>
+
+  <details class="how">
+    <summary>How this page decides Active, Inactive and Unsure</summary>
+    <p>A port is <strong>Active</strong> if any of these happened in the last {{ '%g'|format(data.months) }} months:</p>
+    <ol>
+      <li>Its link is up right now.</li>
+      <li><span class="mono">show interfaces link</span> says the link went down since then
+          (a port that has been down since the switch started doesn't count).</li>
+      <li><span class="mono">show interfaces</span> shows a recent Last input or Last output.</li>
+      <li>An earlier run of this page saw it up.</li>
+    </ol>
+    <p>Otherwise it's <strong>Inactive</strong>, but only if the switch can see back {{ '%g'|format(data.months) }} months:
+      its uptime, plus earlier runs. A member that restarted recently has forgotten its history, so its idle ports
+      are <strong>Unsure</strong> until enough time passes or earlier runs cover the gap.</p>
+    <p>This stack: run {{ data.history_runs }}, history since {{ data.history_since }}.</p>
+  </details>
+  <p class="foot">Port Analyzer · Stack topology</p>
+</main>
+<div id="tip" role="tooltip" hidden></div>
+
+<script id="topo-data" type="application/json">{{ data_json|safe }}</script>
+<script>
+(function () {
+  "use strict";
+  var D = JSON.parse(document.getElementById("topo-data").textContent);
+  var root = document.getElementById("root");
+  var state = { view: "plate", color: "activity", q: "", filter: null, sort: { key: "port", dir: 1 } };
+  var LABEL = { active: "Active", inactive: "Inactive", unsure: "Unsure" };
+  var STATUS = { connected: "Link up", notconnect: "No link", disabled: "Shut down",
+                 "err-disabled": "Err-disabled", "err-disable": "Err-disabled" };
+
+  if (/^https?:$/.test(location.protocol)) document.getElementById("back").hidden = false;
+
+  var slotOf = {};
+  D.vlans.forEach(function (v) { slotOf[v.vlan] = String(v.slot); });
+  function slot(v) { return slotOf[v] || "other"; }
+  function legendKey(v) { return slot(v) === "other" ? "__other" : v; }
+  function vlanShort(v) { return v === "trunk" ? "TRK" : v === "routed" ? "RTD" : v; }
+  function vlanLong(v) { return v === "trunk" ? "Trunk" : v === "routed" ? "Routed" : "VLAN " + v; }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
+  }
+
+  var all = [];
+  D.members.forEach(function (m) { m.ports.forEach(function (p) { if (!p.absent) all.push({ m: m, p: p }); }); });
+
+  function matches(item) {
+    var p = item.p, f = state.filter;
+    if (f && f.type === "activity" && p.activity !== f.value) return false;
+    if (f && f.type === "vlan" && legendKey(p.vlan) !== f.value) return false;
+    if (state.q) {
+      var hay = [p.name, p.desc, vlanLong(p.vlan), p.why, "switch " + item.m.number].join(" ").toLowerCase();
+      if (hay.indexOf(state.q) === -1) return false;
+    }
+    return true;
+  }
+
+  // ---- front panels ----
+  var tiles = [];
+  function portLabel(p) {
+    var l = el("div", "plabel");
+    if (!p) return l;
+    var led = el("span", "led");
+    if (p.absent) led.classList.add("led-none");
+    else if (p.err) led.classList.add("led-err");
+    else if (p.up_now) led.classList.add("led-up");
+    l.appendChild(led);
+    l.appendChild(document.createTextNode(String(p.num)));
+    return l;
+  }
+  function portTile(m, p) {
+    var t = el("div", "port");
+    if (!p || p.absent) { t.classList.add("absent"); return t; }
+    t.tabIndex = 0;
+    t.dataset.act = p.activity;
+    t.dataset.slot = slot(p.vlan);
+    if (p.admin_down) t.classList.add("shut");
+    if (p.err) t.classList.add("err");
+    t.textContent = vlanShort(p.vlan);
+    t.setAttribute("aria-label", p.name + ", " + vlanLong(p.vlan) + ", " + LABEL[p.activity]);
+    t._item = { m: m, p: p };
+    tiles.push(t);
+    return t;
+  }
+  function renderMembers() {
+    var wrap = document.getElementById("members");
+    D.members.forEach(function (m) {
+      var card = el("section", "member");
+      card.dataset.member = m.number;
+      var head = el("header", "member-head");
+      head.appendChild(el("h2", null, "Switch " + m.number));
+      if (m.role) head.appendChild(el("span", "role role-" + m.role.toLowerCase(), m.role === "Active" ? "★ Active" : m.role));
+      head.appendChild(el("span", "member-meta", [m.model, m.uptime ? "up " + m.uptime : "",
+        m.state && m.state !== "Ready" ? m.state : ""].filter(Boolean).join(" · ")));
+      var counts = el("span", "member-counts");
+      counts.appendChild(el("b", null, String(m.counts.inactive)));
+      counts.appendChild(document.createTextNode(" of " + (m.counts.active + m.counts.inactive + m.counts.unsure) + " unused" +
+        (m.counts.unsure ? " · " + m.counts.unsure + " unsure" : "")));
+      head.appendChild(counts);
+      card.appendChild(head);
+      var plate = el("div", "plate");
+      var n = m.port_count, size = n >= 24 ? 12 : n;
+      for (var g = 0; g < n; g += size) {
+        var grp = el("div", "pgroup");
+        grp.style.gridTemplateColumns = "repeat(" + (size / 2) + ", var(--tile-w))";
+        var top = [], bottom = [];
+        for (var i = g; i < g + size; i += 2) { top.push(m.ports[i]); bottom.push(m.ports[i + 1]); }
+        top.forEach(function (p) { grp.appendChild(portLabel(p)); });
+        top.forEach(function (p) { grp.appendChild(portTile(m, p)); });
+        bottom.forEach(function (p) { grp.appendChild(portTile(m, p)); });
+        bottom.forEach(function (p) { grp.appendChild(portLabel(p)); });
+        plate.appendChild(grp);
+      }
+      card.appendChild(plate);
+      wrap.appendChild(card);
+    });
+  }
+
+  // ---- stack cables, drawn in the left gutter ----
+  var hasStackInfo = D.members.length > 1 && (D.links.length > 0 || D.members.some(function (m) {
+    return m.stack_ports.some(function (s) { return s.status; });
+  }));
+  var stackEl = document.getElementById("stack");
+  var svg = document.getElementById("cables");
+  function svgEl(tag, attrs) {
+    var e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+  function drawCables() {
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    if (!hasStackInfo || state.view !== "plate") return;
+    var gut = 64, x = gut - 7, base = stackEl.getBoundingClientRect(), h = stackEl.offsetHeight;
+    svg.setAttribute("height", h);
+    svg.setAttribute("viewBox", "0 0 " + gut + " " + h);
+    var pos = {}, order = {};
+    Array.prototype.forEach.call(document.querySelectorAll(".member"), function (card, idx) {
+      var r = card.getBoundingClientRect(), top = r.top - base.top;
+      // Port 2 above port 1, so the usual cabling (port 1 to the next switch's port 2) doesn't cross
+      pos[card.dataset.member] = { 2: top + r.height * 0.40, 1: top + r.height * 0.64 };
+      order[card.dataset.member] = idx;
+    });
+    D.links.forEach(function (l) {
+      if (!pos[l.a] || !pos[l.b]) return;
+      var y1 = pos[l.a][l.pa || 1], y2 = pos[l.b][l.pb || 2];
+      var bulge = Math.min(gut - 12, 16 + 14 * Math.max(0, Math.abs(order[l.a] - order[l.b]) - 1));
+      svg.appendChild(svgEl("path", { d: "M" + x + " " + y1 + " C" + (x - bulge) + " " + y1 + " " + (x - bulge) + " " + y2 + " " + x + " " + y2,
+        "class": "cable" + (l.ok ? "" : " cable-down") }));
+    });
+    D.members.forEach(function (m) {
+      m.stack_ports.forEach(function (sp) {
+        if (!sp.status || !pos[m.number]) return;
+        var y = pos[m.number][sp.port], ok = sp.status.toUpperCase() === "OK";
+        if (!ok) svg.appendChild(svgEl("path", { d: "M" + x + " " + y + " h-22", "class": "cable cable-down" }));
+        var c = svgEl("circle", { cx: x, cy: y, r: ok ? 4.5 : 6, "class": "sp " + (ok ? "sp-ok" : "sp-down") });
+        var t = svgEl("title", {});
+        t.textContent = "Switch " + m.number + " stack port " + sp.port + ": " + sp.status +
+          (/^\d+$/.test(sp.neighbor) ? ", cabled to switch " + sp.neighbor : "");
+        c.appendChild(t);
+        svg.appendChild(c);
+        if (!ok) svg.appendChild(svgEl("path", { d: "M" + (x - 2.5) + " " + (y - 2.5) + " l5 5 M" + (x + 2.5) + " " + (y - 2.5) + " l-5 5", "class": "sp-x" }));
+      });
+    });
+  }
+
+  // ---- legend (doubles as a filter) ----
+  function chip(label, count, swatchStyle, swatchClass, filter) {
+    var on = !!state.filter && state.filter.type === filter.type && state.filter.value === filter.value;
+    var b = el("button", "chip");
+    b.type = "button";
+    var s = el("span", swatchClass || "swatch");
+    if (swatchStyle) s.style.cssText = swatchStyle;
+    b.appendChild(s);
+    b.appendChild(document.createTextNode(label + " "));
+    b.appendChild(el("b", null, String(count)));
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+    b.addEventListener("click", function () { state.filter = on ? null : filter; renderLegend(); applyFilter(); });
+    return b;
+  }
+  function renderLegend() {
+    var lg = document.getElementById("legend");
+    lg.textContent = "";
+    if (state.color === "activity") {
+      ["active", "inactive", "unsure"].forEach(function (a) {
+        lg.appendChild(chip(LABEL[a], D.summary[a], null, "dot " + a, { type: "activity", value: a }));
+      });
+    } else {
+      var other = [], otherCount = 0;
+      D.vlans.forEach(function (v) {
+        var s = String(v.slot);
+        if (s === "other") { other.push(v.vlan); otherCount += v.count; return; }
+        var color = s === "trunk" || s === "routed" ? "var(--v-trunk)" : "var(--v" + s + ")";
+        lg.appendChild(chip(vlanLong(v.vlan), v.count, "background:" + color, null, { type: "vlan", value: v.vlan }));
+      });
+      if (other.length) lg.appendChild(chip("Other (" + other.join(", ") + ")", otherCount, "background:var(--v-other)", null,
+        { type: "vlan", value: "__other" }));
+      lg.appendChild(el("span", "legend-note", "Solid = active · outline = inactive · striped = unsure"));
+    }
+    if (state.filter) {
+      var c = el("button", "link", "Clear filter");
+      c.type = "button";
+      c.addEventListener("click", function () { state.filter = null; renderLegend(); applyFilter(); });
+      lg.appendChild(c);
+    }
+  }
+
+  // ---- table ----
+  var COLS = [
+    { key: "activity", label: "Result", get: function (i) { return ["inactive", "unsure", "active"].indexOf(i.p.activity); } },
+    { key: "switch", label: "Switch", get: function (i) { return i.m.number; }, num: true },
+    { key: "port", label: "Port", get: function (i) { return i.m.number * 100 + i.p.num; }, show: function (i) { return i.p.name; } },
+    { key: "desc", label: "Description", get: function (i) { return i.p.desc; } },
+    { key: "vlan", label: "VLAN", get: function (i) { return isNaN(+i.p.vlan) ? 1e6 : +i.p.vlan; }, show: function (i) { return i.p.vlan; }, num: true },
+    { key: "status", label: "Status", get: function (i) { return STATUS[i.p.status] || i.p.status; } },
+    { key: "last", label: "Last active", get: function (i) { return i.p.last_active; } },
+    { key: "why", label: "Why", get: function (i) { return i.p.why; }, note: true }
+  ];
+  function renderHead() {
+    var tr = el("tr");
+    COLS.forEach(function (c) {
+      var th = el("th", null, c.label);
+      if (state.sort.key === c.key) th.setAttribute("aria-sort", state.sort.dir > 0 ? "ascending" : "descending");
+      th.addEventListener("click", function () {
+        state.sort = { key: c.key, dir: state.sort.key === c.key ? -state.sort.dir : 1 };
+        renderHead(); renderBody();
+      });
+      tr.appendChild(th);
+    });
+    var thead = document.getElementById("thead");
+    thead.textContent = "";
+    thead.appendChild(tr);
+  }
+  function renderBody() {
+    var col = COLS.filter(function (c) { return c.key === state.sort.key; })[0];
+    var rows = all.filter(matches).sort(function (a, b) {
+      var x = col.get(a), y = col.get(b);
+      if (x === y) return (a.m.number * 100 + a.p.num) - (b.m.number * 100 + b.p.num);
+      return (x > y ? 1 : -1) * state.sort.dir;
+    });
+    var tb = document.getElementById("tbody");
+    tb.textContent = "";
+    rows.forEach(function (i) {
+      var tr = el("tr");
+      COLS.forEach(function (c) {
+        var td = el("td", c.num ? "num" : c.note ? "note" : null);
+        if (c.key === "activity") {
+          var r = el("span", "result-cell");
+          r.appendChild(el("span", "dot " + i.p.activity));
+          r.appendChild(document.createTextNode(LABEL[i.p.activity]));
+          td.appendChild(r);
+        } else {
+          td.textContent = String((c.show || c.get)(i));
+        }
+        tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    });
+  }
+
+  function applyFilter() {
+    var shown = 0;
+    tiles.forEach(function (t) {
+      var ok = matches(t._item);
+      t.classList.toggle("dim", !ok);
+      if (ok) shown++;
+    });
+    document.getElementById("shown").textContent = (state.filter || state.q) ? "Showing " + shown + " of " + all.length + " ports" : "";
+    if (state.view === "table") renderBody();
+  }
+
+  // ---- tooltip ----
+  var tip = document.getElementById("tip");
+  function fillTip(item) {
+    var p = item.p;
+    tip.textContent = "";
+    var head = el("div", "tip-head");
+    head.appendChild(el("strong", null, p.name));
+    head.appendChild(el("span", "tip-sub", "Switch " + item.m.number + ", port " + p.num));
+    tip.appendChild(head);
+    if (p.desc) tip.appendChild(el("div", "tip-desc", p.desc));
+    var dl = el("dl");
+    function row(k, v, soft) { dl.appendChild(el("dt", null, k)); dl.appendChild(el("dd", soft ? "soft" : null, v)); }
+    row("VLAN", vlanLong(p.vlan));
+    row("Result", LABEL[p.activity]);
+    row("Why", p.why, true);
+    if (p.last_active) row("Last active", p.last_active);
+    row("Status", STATUS[p.status] || p.status);
+    var speed = [p.speed, p.duplex].filter(function (s) { return s && s !== "auto"; }).join(" / ");
+    if (speed) row("Speed", speed, true);
+    tip.appendChild(dl);
+    tip.hidden = false;
+  }
+  function placeTip(x, y) {
+    var w = tip.offsetWidth, h = tip.offsetHeight, left = x + 14, top = y + 14;
+    if (left + w > window.innerWidth - 8) left = x - w - 14;
+    if (top + h > window.innerHeight - 8) top = y - h - 14;
+    tip.style.left = Math.max(8, left) + "px";
+    tip.style.top = Math.max(8, top) + "px";
+  }
+  var membersEl = document.getElementById("members");
+  membersEl.addEventListener("pointermove", function (e) {
+    var t = e.target.closest(".port");
+    if (!t || !t._item) { tip.hidden = true; tip._for = null; return; }
+    if (tip._for !== t) { fillTip(t._item); tip._for = t; }
+    placeTip(e.clientX, e.clientY);
+  });
+  membersEl.addEventListener("pointerleave", function () { tip.hidden = true; tip._for = null; });
+  membersEl.addEventListener("focusin", function (e) {
+    var t = e.target.closest(".port");
+    if (!t || !t._item) return;
+    fillTip(t._item); tip._for = t;
+    var r = t.getBoundingClientRect();
+    placeTip(r.right, r.bottom);
+  });
+  membersEl.addEventListener("focusout", function () { tip.hidden = true; tip._for = null; });
+
+  // ---- controls ----
+  Array.prototype.forEach.call(document.querySelectorAll("button[data-view]"), function (b) {
+    b.addEventListener("click", function () {
+      state.view = b.dataset.view;
+      Array.prototype.forEach.call(document.querySelectorAll("button[data-view]"), function (o) { o.setAttribute("aria-pressed", String(o === b)); });
+      document.getElementById("plate-view").hidden = state.view !== "plate";
+      document.getElementById("table-view").hidden = state.view !== "table";
+      if (state.view === "table") { renderHead(); renderBody(); } else drawCables();
+    });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll("button[data-color]"), function (b) {
+    b.addEventListener("click", function () {
+      state.color = b.dataset.color;
+      root.dataset.color = state.color;
+      Array.prototype.forEach.call(document.querySelectorAll("button[data-color]"), function (o) { o.setAttribute("aria-pressed", String(o === b)); });
+      state.filter = null;
+      renderLegend(); applyFilter();
+    });
+  });
+  document.getElementById("q").addEventListener("input", function (e) { state.q = e.target.value.trim().toLowerCase(); applyFilter(); });
+  document.getElementById("csv").addEventListener("click", function () {
+    function cell(v) {
+      v = String(v === undefined || v === null ? "" : v);
+      if (/^[=+\-@]/.test(v)) v = "'" + v;            // keep Excel from running it as a formula
+      return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+    }
+    var lines = [["Switch", "Port", "Interface", "Description", "VLAN", "Status", "Result", "Last active", "Why"].join(",")];
+    all.filter(matches).forEach(function (i) {
+      var p = i.p;
+      lines.push([i.m.number, p.num, p.name, p.desc, p.vlan, STATUS[p.status] || p.status,
+                  LABEL[p.activity], p.last_active, p.why].map(cell).join(","));
+    });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([lines.join("\r\n")], { type: "text/csv" }));
+    a.download = D.hostname + "-ports-" + D.generated.slice(0, 10) + ".csv";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  });
+
+  if (hasStackInfo) stackEl.classList.add("has-gutter");
+  else Array.prototype.forEach.call(document.querySelectorAll(".cable-only"), function (e) { e.hidden = true; });
+  renderMembers();
+  renderLegend();
+  applyFilter();
+  drawCables();
+  if (window.ResizeObserver) new ResizeObserver(drawCables).observe(stackEl);
+  else window.addEventListener("resize", drawCables);
+})();
+</script>
+</body>
+</html>

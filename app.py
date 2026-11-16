@@ -21,6 +21,7 @@ from flask import Flask, Response, abort, jsonify, render_template, request
 import analyzer
 import report
 import switches as sw
+import topology
 
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("PA_DATA_DIR", APP_DIR / "data"))
@@ -28,6 +29,7 @@ REPORTS_DIR = DATA_DIR / "reports"
 DEBUG_DIR = DATA_DIR / "debug"
 SWITCHES_FILE = DATA_DIR / "switches.csv"
 SETTINGS_FILE = DATA_DIR / "settings.json"
+TOPOLOGY_DIR = DATA_DIR / "topology"
 
 DEFAULT_SETTINGS = {"months": 6, "default_protocol": "telnet", "parallel": 10, "timeout": 20}
 SWITCH_FIELDS = ["address", "type", "protocol", "building", "location"]
@@ -290,6 +292,69 @@ def test_switch():
     return jsonify({"ok": True, "name": s["name"], "ports": s["ports"], "inactive": s["inactive"],
                     "unsure": s["unsure"], "uptime_days": s["uptime_days"], "problem": s["problem"],
                     "seconds": seconds})
+
+
+# ---------------------------------------------------------------------------
+# Stack topology: one Cisco stack, every member's ports 1-48, VLANs and use
+# ---------------------------------------------------------------------------
+@app.get("/topology")
+def topology_form():
+    return render_template("topology_form.html")
+
+
+@app.get("/api/topology/pages")
+def topology_pages():
+    return jsonify({"pages": topology.list_pages(TOPOLOGY_DIR)})
+
+
+@app.post("/api/topology")
+def topology_run():
+    payload = request.json or {}
+    address = str(payload.get("address", "")).strip()
+    saved = next((s for s in load_switches() if s["address"] == address), None)
+    settings = load_settings()
+    protocol = sw.clean_protocol(payload.get("protocol") or (saved or {}).get("protocol")
+                                 or settings["default_protocol"])
+    problems = []
+    if not address:
+        problems.append("Pick a stack, or type its address.")
+    elif saved and saved["type"] != "cisco_ios":
+        problems.append(f"{address} is a {sw.TYPES.get(saved['type'], saved['type'])}. "
+                        "Only Cisco Catalyst stacks can be drawn.")
+    if not protocol:
+        problems.append("Connection must be SSH or Telnet.")
+    try:
+        months = parse_months(payload.get("months", settings["months"]))
+    except (TypeError, ValueError):
+        months = None
+        problems.append("Months must be a number from 0.5 to 120.")
+    login = logins_from(payload)["telnet"]
+    if not login.password:
+        problems.append("Enter the password.")
+    if problems:
+        return jsonify({"ok": False, "problems": problems}), 400
+    where = ", ".join(x for x in ((saved or {}).get("building"), (saved or {}).get("location")) if x)
+    try:
+        data, _, path = topology.run_topology(address, protocol, login, months, int(settings["timeout"]),
+                                              TOPOLOGY_DIR, where=where, progress=lambda msg: None)
+    except Exception as exc:
+        return jsonify({"ok": False, "problems": [f"Couldn't read {address}: {sw.friendly_error(exc)}"]}), 502
+    return jsonify({"ok": True, "url": f"/topology/page/{path.name}", "summary": data["summary"]})
+
+
+@app.get("/topology/page/<name>")
+def topology_page(name):
+    pages = (TOPOLOGY_DIR / "pages").resolve()
+    path = (pages / name).resolve()
+    if path.parent != pages or path.suffix != ".html" or not path.is_file():
+        abort(404)
+    return Response(path.read_text(encoding="utf-8"), mimetype="text/html")
+
+
+@app.get("/topology/demo")
+def topology_demo():
+    _, html, _ = topology.run_demo(save=False)
+    return html
 
 
 # ---------------------------------------------------------------------------

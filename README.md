@@ -78,6 +78,28 @@ Click a switch to see only its ports. The table below starts on **Inactive** por
 | **Unsure** | The switch can't prove it either way. The **Why** column says why. |
 | **Active** | The link is up, or the port was used within the months you picked. |
 
+## Stack topology
+
+Click **Stack topology** at the top of the page to draw one Cisco stack. Every member is drawn as its own front panel with ports 1–48, and each port shows its VLAN. Color the ports by **Use** (green in use, empty socket unused, amber can't tell) or by **VLAN**. The stack cables between members are drawn on the left, and you get a warning if the stack ring is broken.
+
+1. Pick a Cisco switch from your switch list, or choose **Another address…** and type one.
+2. Enter your login and click **Draw stack**.
+
+Hover over a port for its description, VLAN, status and why it got its result. Switch to **Table** for a sortable list, or click **Download CSV**. Every drawing is saved in `data\topology\pages`, and **Earlier drawings** opens them again. To see what it looks like first, click **See a made-up example**.
+
+It decides Active, Inactive and Unsure a bit more carefully than the main check, because a stack can tell it more:
+- **Active** if the link is up now, or went down in the months you picked (`show interfaces link`), or Last input/output is recent, or an earlier drawing saw it up.
+- **Inactive** only if the switch can see back that far: its uptime plus earlier drawings.
+- **Unsure** otherwise. A member that restarted 3 weeks ago can't prove a port was unused for 6 months.
+
+Each drawing remembers what it saw in `data\topology\history`. If you draw the same stack at least every few days, it remembers ports that were in use before a restart, so fewer show as Unsure.
+
+From the command line:
+```
+.venv\Scripts\python topology.py 10.99.4.11 -u admin -p telnet -m 6
+.venv\Scripts\python topology.py --demo
+```
+
 ## How it knows when a port was last used
 
 Each type of switch keeps track differently:
@@ -135,14 +157,17 @@ app.py              web app (Flask, served by waitress on 127.0.0.1 only)
 analyzer.py         reading each switch type's ports, deciding Inactive/Unsure/Active, the command line
 switches.py         logging in over SSH/telnet for each switch type
 report.py           the Excel report
-templates/, static/ the page
+topology.py         Stack topology: reading a Cisco stack, deciding each port, the saved page
+topology_demo.py    a made-up stack for the example page and the tests
+templates/, static/ the pages
 examples/           a made-up switch list
-tests/              pretend switches, sample output for each type, an end-to-end test
+tests/              pretend switches, sample output for each type, end-to-end tests
 ```
 
 **Run the tests** (no real switches needed). The test starts one pretend switch of each type, plus one with a wrong password and one with the wrong type, and drives the whole app:
 ```
 .venv\Scripts\python tests\test_end_to_end.py
+.venv\Scripts\python tests\test_topology.py
 ```
 
 **Add a switch type:** in `switches.py`, add it to `TYPES`, `MODELS` and `DRIVERS`. In `analyzer.py`, write a reader that returns each port's status, VLAN, description and when it was last used (or that it was never used, and how far back the switch can see), and add it to `READERS`. Put sample output in `tests/samples.py` and the expected answers next to it.
