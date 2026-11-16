@@ -187,6 +187,93 @@
   details.how summary { cursor: pointer; color: var(--ink); font-weight: 600; }
   details.how ol { padding-left: 20px; }
   .foot { color: var(--ink-3); font-size: 0.8rem; margin-top: 14px; }
+  .btn.primary { background: var(--action); border-color: var(--action); color: #fff; }
+  .print-opts { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 12px 16px; margin: 0 0 14px; }
+  .po-row { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; }
+  .po-row label { display: inline-flex; align-items: center; gap: 7px; font-size: 0.9rem; }
+  .po-row select { font: inherit; font-size: 0.9rem; padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px;
+                   background: var(--surface); color: var(--ink); }
+  .po-hint { color: var(--ink-3); font-size: 0.82rem; margin: 8px 0 0; }
+  .print-only { display: none; }
+
+  /* ---------- Printing: black and white, landscape, made to be written on ----------
+     Active   = solid black box, white VLAN number
+     Inactive = empty box, black VLAN number
+     Unsure   = empty box with a black corner
+     Shapes, not shades, so it reads the same on any printer. */
+  @media print {
+    @page { size: letter landscape; margin: 0.4in; }
+    :root { --tile-w: 35px; --tile-h: 26px; }
+    html, body { background: #fff !important; color: #000 !important; }
+    body { font-size: 11px; }
+    main { max-width: none; padding: 0; }
+    .print-only { display: block !important; }
+    span.print-only { display: inline !important; }
+    h1, .sub, .totals, .notice, .controls, .print-opts, .legend, .key-row, details.how, .foot, .back,
+    #tip, #cables, #table-view { display: none !important; }
+    #plate-view, #plate-view[hidden] { display: block !important; }
+    body.print-no-panels #plate-view { display: none !important; }
+    body.print-no-list #print-list { display: none !important; }
+
+    .print-head { margin-bottom: 8px; color: #000; }
+    .print-head .ph-title { font-size: 17px; font-weight: 700; }
+    .print-head .ph-title span { font-weight: 400; font-size: 13px; }
+    .print-head .ph-line { margin-top: 2px; }
+    .print-head .ph-legend { display: flex !important; flex-wrap: wrap; gap: 4px 16px; align-items: center; margin-top: 6px;
+                             padding: 5px 8px; border: 1px solid #000; }
+    .ph-legend > span { display: inline-flex; align-items: center; gap: 5px; }
+    .ph-legend .port { width: 30px; height: 20px; line-height: 20px; font-size: 11px; display: inline-block; }
+    .print-head ul { margin: 5px 0 0; padding-left: 16px; }
+
+    .stack.has-gutter .members { margin-left: 0; }
+    .members { gap: 8px; }
+    .member { background: #fff !important; color: #000 !important; border: 1.5px solid #000; border-radius: 4px;
+              padding: 5px 8px 6px; overflow: visible; break-inside: avoid; page-break-inside: avoid; }
+    .member-head { margin-bottom: 3px; }
+    .member-head h2, .member-head, .member-counts, .member-counts b, .member-meta { color: #000 !important; }
+    .member-head h2 { font-size: 13px; }
+    .role { border-color: #000 !important; color: #000 !important; }
+    .member-stack { font-size: 10.5px; }
+    .plate { gap: 8px; }
+    .pgroup { column-gap: 3px; row-gap: 2px; }
+    .plabel { color: #000; height: 13px; line-height: 13px; font-size: 10px; }
+
+    .port, .ph-legend .port {
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+      background: #fff !important; color: #000 !important; opacity: 1 !important;
+      box-shadow: inset 0 0 0 1.5px #000 !important; border-radius: 2px;
+      font-size: 13px; font-weight: 700; letter-spacing: 0;
+      text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 1px #fff;
+    }
+    .port[data-act="active"] { background: #000 !important; color: #fff !important; text-shadow: 0 0 2px #000, 0 0 1px #000; }
+    .port[data-act="unsure"] { background-image: linear-gradient(135deg, #000 0 9px, transparent 9px) !important; }
+    /* Shut down = dashed box on paper, so no line crosses the VLAN number */
+    .port.shut::after { display: none; }
+    .port.shut { box-shadow: none !important; outline: 1.5px dashed #000; outline-offset: -1.5px; }
+    .port.shut[data-act="active"] { outline-color: #fff; outline-offset: -4px; }
+    .port.err { box-shadow: inset 0 0 0 1.5px #000 !important; }
+    .port.absent { box-shadow: inset 0 0 0 1px #999 !important; background: none !important; }
+    .led { -webkit-print-color-adjust: exact; print-color-adjust: exact; width: 6px; height: 6px;
+           background: #fff !important; box-shadow: inset 0 0 0 1px #000 !important; }
+    .led-up { background: #000 !important; }
+    .led-err { background: #000 !important; border-radius: 0; transform: rotate(45deg); width: 6px; height: 6px; }
+    .led-none { visibility: hidden; }
+
+    #print-list { break-before: page; page-break-before: always; }
+    body.print-no-panels #print-list { break-before: auto; page-break-before: auto; }
+    #print-list h2 { font-size: 14px; margin: 0 0 6px; }
+    .plist { border-collapse: collapse; width: 100%; font-size: 11px; }
+    .plist th, .plist td { border: 1px solid #000; padding: 4px 6px; text-align: left; color: #000; background: #fff;
+                           position: static; white-space: nowrap; }
+    .plist th { font-weight: 700; }
+    .plist td.vlan { font-weight: 700; font-size: 12px; }
+    .plist td.desc { white-space: normal; }
+    .plist tr { break-inside: avoid; page-break-inside: avoid; height: 24px; }
+    .plist .cb { width: 22px; }
+    .plist .tick { display: inline-block; width: 11px; height: 11px; border: 1.2px solid #000; }
+    .plist .notes { width: 34%; }
+    body.print-no-notes .plist .notes { display: none; }
+  }
   @media (max-width: 760px) { main { padding: 16px; } .totals { grid-template-columns: repeat(2, minmax(0, 1fr)); } .search { width: 100%; } }
 </style>
 </head>
@@ -227,8 +314,44 @@
     <span class="spacer"></span>
     <span class="shown" id="shown"></span>
     <button type="button" class="btn" id="csv">Download CSV</button>
+    <button type="button" class="btn" id="print" title="Black-and-white sheet to print or save as a PDF">Print / Save PDF</button>
+  </div>
+  <div class="print-opts" id="print-opts" hidden>
+    <div class="po-row">
+      <label><input type="checkbox" id="po-panels" checked> Front panels</label>
+      <label>Port list
+        <select id="po-list">
+          <option value="inactive,unsure">Inactive and Unsure ports</option>
+          <option value="inactive">Inactive ports only</option>
+          <option value="all">All ports</option>
+          <option value="">No list</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="po-notes" checked> Notes column</label>
+      <button type="button" class="btn primary" id="po-go">Print…</button>
+      <button type="button" class="link" id="po-cancel">Cancel</button>
+    </div>
+    <p class="po-hint">Prints in black and white, landscape. To get a PDF, choose “Save as PDF” as the printer.
+      Solid black = active, empty box = inactive, black corner = unsure.</p>
   </div>
   <div class="legend" id="legend"></div>
+
+  <div class="print-only print-head">
+    <div class="ph-title">{{ data.hostname }}
+      <span>{% if data.where %}· {{ data.where }} {% endif %}· {{ data.host }} · checked {{ data.generated }}</span></div>
+    <div class="ph-line">{{ data.members|length }} member{{ '' if data.members|length == 1 else 's' }}, ports 1–48:
+      <strong>{{ data.summary.active }}</strong> active, <strong>{{ data.summary.inactive }}</strong> inactive,
+      <strong>{{ data.summary.unsure }}</strong> unsure. Active = used in the last {{ '%g'|format(data.months) }} months.
+      Number in each box = VLAN.</div>
+    <div class="ph-legend">
+      <span><span class="port" data-act="active">20</span> Active (in use)</span>
+      <span><span class="port" data-act="inactive">20</span> Inactive (free)</span>
+      <span><span class="port" data-act="unsure">20</span> Unsure (check it)</span>
+      <span><span class="port shut" data-act="inactive">20</span> Shut down (dashed)</span>
+      <span>Dot by the port number: <span class="led led-up"></span> link up now <span class="led"></span> no link <span class="led led-err"></span> err-disabled</span>
+    </div>
+    {% if data.warnings %}<ul>{% for w in data.warnings %}<li>{{ w }}</li>{% endfor %}</ul>{% endif %}
+  </div>
 
   <div id="plate-view">
     <div class="stack" id="stack">
@@ -245,6 +368,8 @@
   <div id="table-view" hidden>
     <div class="table-wrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
   </div>
+
+  <section id="print-list" class="print-only"></section>
 
   <details class="how">
     <summary>How this page decides Active, Inactive and Unsure</summary>
@@ -347,6 +472,13 @@
       counts.appendChild(document.createTextNode(" of " + (m.counts.active + m.counts.inactive + m.counts.unsure) + " unused" +
         (m.counts.unsure ? " · " + m.counts.unsure + " unsure" : "")));
       head.appendChild(counts);
+      if (D.members.length > 1) {
+        var cables = m.stack_ports.filter(function (sp) { return sp.status; }).map(function (sp) {
+          var ok = sp.status.toUpperCase() === "OK";
+          return "port " + sp.port + (ok ? (/^\d+$/.test(sp.neighbor) ? " to Switch " + sp.neighbor : " OK") : " DOWN");
+        });
+        if (cables.length) head.appendChild(el("span", "member-stack print-only", "Stack cables: " + cables.join(", ")));
+      }
       card.appendChild(head);
       var plate = el("div", "plate");
       var n = m.port_count, size = n >= 24 ? 12 : n;
@@ -602,6 +734,48 @@
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
   });
+
+  // ---- printing ----
+  var printOpts = document.getElementById("print-opts");
+  function buildPrintList() {
+    var panels = document.getElementById("po-panels").checked;
+    var which = document.getElementById("po-list").value;
+    var notes = document.getElementById("po-notes").checked;
+    document.body.classList.toggle("print-no-panels", !panels);
+    document.body.classList.toggle("print-no-list", !which);
+    document.body.classList.toggle("print-no-notes", !notes);
+    var box = document.getElementById("print-list");
+    box.textContent = "";
+    if (!which) return;
+    var wanted = which === "all" ? null : which.split(",");
+    var rows = all.filter(function (i) { return !wanted || wanted.indexOf(i.p.activity) !== -1; });
+    var title = which === "all" ? "All ports" : which === "inactive" ? "Inactive ports" : "Inactive and Unsure ports";
+    box.appendChild(el("h2", null, title + " · " + D.hostname + " · " + rows.length + " port" + (rows.length === 1 ? "" : "s")));
+    var table = el("table", "plist");
+    var hr = el("tr");
+    [["", "cb"], ["Switch"], ["Port"], ["VLAN"], ["Result"], ["Description"], ["Last active"], ["Notes", "notes"]]
+      .forEach(function (h) { hr.appendChild(el("th", h[1] || null, h[0])); });
+    var thead = el("thead"); thead.appendChild(hr); table.appendChild(thead);
+    var tb = el("tbody");
+    rows.forEach(function (i) {
+      var tr = el("tr");
+      var cb = el("td", "cb"); cb.appendChild(el("span", "tick")); tr.appendChild(cb);
+      tr.appendChild(el("td", null, String(i.m.number)));
+      tr.appendChild(el("td", null, i.p.name));
+      tr.appendChild(el("td", "vlan", vlanLong(i.p.vlan).replace("VLAN ", "")));
+      tr.appendChild(el("td", null, LABEL[i.p.activity] + (i.p.admin_down ? ", shut" : "") + (i.p.err ? ", err-disabled" : "")));
+      tr.appendChild(el("td", "desc", i.p.desc));
+      tr.appendChild(el("td", null, i.p.last_active || "never seen"));
+      tr.appendChild(el("td", "notes", ""));
+      tb.appendChild(tr);
+    });
+    table.appendChild(tb);
+    box.appendChild(table);
+  }
+  document.getElementById("print").addEventListener("click", function () { printOpts.hidden = !printOpts.hidden; });
+  document.getElementById("po-cancel").addEventListener("click", function () { printOpts.hidden = true; });
+  document.getElementById("po-go").addEventListener("click", function () { buildPrintList(); window.print(); });
+  window.addEventListener("beforeprint", buildPrintList);   // Ctrl+P gets the same sheet
 
   if (hasStackInfo) stackEl.classList.add("has-gutter");
   else Array.prototype.forEach.call(document.querySelectorAll(".cable-only"), function (e) { e.hidden = true; });
