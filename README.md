@@ -85,7 +85,9 @@ Click **Stack topology** at the top of the page to draw one Cisco stack. Every m
 1. Pick a Cisco switch from your switch list, or choose **Another address…** and type one.
 2. Enter your login and click **Draw stack**.
 
-Hover over a port for its description, VLAN, status and why it got its result. Switch to **Table** for a sortable list, or click **Download CSV**. Every drawing is saved in `data\topology\pages`, and **Earlier drawings** opens them again. To see what it looks like first, click **See a made-up example**.
+Hover over a port for its description, VLAN, status and why it got its result. Switch to **Table** for a sortable list, or click **Download CSV**.
+
+**Printing for the field:** click **Print / Save PDF**. It makes a black-and-white, landscape sheet that reads the same on any printer: a **solid black box** is a port in use, an **empty box** is free, a box with a **black corner** is unsure, and a **dashed box** is shut down. The VLAN is printed big in every box. You can add a checklist of the Inactive and Unsure ports (or all ports) with a box to tick and a Notes column to write in. To get a PDF instead of paper, pick **Save as PDF** as the printer. Every drawing is saved in `data\topology\pages`, and **Earlier drawings** opens them again. To see what it looks like first, click **See a made-up example**.
 
 It decides Active, Inactive and Unsure a bit more carefully than the main check, because a stack can tell it more:
 - **Active** if the link is up now, or went down in the months you picked (`show interfaces link`), or Last input/output is recent, or an earlier drawing saw it up.

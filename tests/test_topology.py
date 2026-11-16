@@ -165,6 +165,10 @@ def parsers():
                                                     "Description: </script><img src=x onerror=alert(1)>", 1)
     html = T.render_html(T.build_stack(evil, "x", 6)[0])
     ok &= check("a port description can't break out of the page's data", "</script><img" not in html)
+    ok &= check("print sheet: button, black-and-white print styles, port checklist",
+                'id="print"' in html and "@media print" in html and 'id="print-list"' in html)
+    ok &= check("print sheet keeps the black boxes even with 'Background graphics' off",
+                "print-color-adjust: exact" in html)
     return ok
 
 
