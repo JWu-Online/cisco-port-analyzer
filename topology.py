@@ -52,6 +52,7 @@ COMMANDS = {
     "stack_ports": "show switch stack-ports",
     "version": "show version",
     "status": "show interfaces status",
+    "vlans": "show vlan brief",
     "link": "show interfaces link",
     "interfaces": "show interfaces",
 }
@@ -225,6 +226,23 @@ def parse_status(output):
     return ports
 
 
+_VLAN_ROW = re.compile(r"^(\d{1,4})\s+(.+?)\s+(active|suspended|act/lshut|sus/lshut|act/ishut|sus/ishut|act/unsup)\b")
+
+
+def parse_vlan_names(output):
+    """'show vlan brief' -> {"20": "STAFF-DATA", ...}.
+
+    VLANs nobody named (IOS calls them VLAN0020) are left out, since the name
+    would just repeat the number.
+    """
+    names = {}
+    for line in (output or "").splitlines():
+        m = _VLAN_ROW.match(line)
+        if m and not re.fullmatch(r"VLAN0*" + m.group(1), m.group(2)):
+            names[m.group(1)] = m.group(2)
+    return names
+
+
 def parse_link(output):
     """'show interfaces link' -> {port: down time text}.
 
@@ -374,6 +392,7 @@ def build_stack(outputs, host, months=6, history=None, now=None, where=""):
     stack_ports = parse_two_port_table(outputs.get("stack_ports"))
     status = parse_status(outputs.get("status"))
     link = parse_link(outputs.get("link"))
+    vlan_names = parse_vlan_names(outputs.get("vlans"))
     stack_days = version["uptime"].total_seconds() / 86400 if version["uptime"] else None
     intfs = {normalize_intf(p["port"]): p
              for p in analyzer.parse_ios_interfaces(outputs.get("interfaces"), stack_days)}
@@ -494,6 +513,7 @@ def build_stack(outputs, host, months=6, history=None, now=None, where=""):
         "generated": now.strftime("%Y-%m-%d %H:%M"),
         "months": months, "summary": totals, "warnings": warnings,
         "vlans": _vlan_legend(vlan_counts), "members": members_out,
+        "vlan_names": {v: vlan_names[v] for v in sorted(vlan_counts, key=lambda v: (len(v), v)) if v in vlan_names},
         "links": _stack_links(neighbors, stack_ports),
         "history_runs": history["runs"], "history_since": history["first_run"][:10],
     }

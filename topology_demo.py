@@ -202,6 +202,28 @@ def demo_outputs():
         "    3          DOWN          OK",
     ])
 
+    # VLAN 85 was never named, so IOS shows its default name (the page hides it)
+    vlans = "\n".join([
+        "",
+        "VLAN Name                             Status    Ports",
+        "---- -------------------------------- --------- -------------------------------",
+        "1    default                          active    Gi1/1/1, Gi1/1/2, Gi1/1/3, Gi1/1/4",
+        "20   STAFF-DATA                       active    Gi1/0/1, Gi1/0/2, Gi1/0/3, Gi1/0/9",
+        "                                                Gi1/0/12, Gi1/0/19, Gi1/0/33",
+        "21   FACULTY-OFFICES                  active    Gi1/0/31, Gi1/0/32",
+        "30   STUDENT-LAB                      active    Gi1/0/4, Gi1/0/7, Gi1/0/14",
+        "40   VOICE-PHONES                     active    ",
+        "50   PRINTERS                         active    Gi1/0/11, Gi1/0/13",
+        "60   WIFI-AP                          active    Gi1/0/15, Gi1/0/38",
+        "70   SECURITY-CAMERAS                 active    Gi3/0/3",
+        "85   VLAN0085                         active    ",
+        "99   NET-MGMT                         active    Gi1/0/10",
+        "1002 fddi-default                     act/unsup ",
+        "1003 token-ring-default               act/unsup ",
+        "1004 fddinet-default                  act/unsup ",
+        "1005 trnet-default                    act/unsup ",
+    ])
+
     return {
         "prompt": "DEMO-IDF-E3#",
         "switch": switch,
@@ -209,6 +231,7 @@ def demo_outputs():
         "stack_ports": stack_ports,
         "version": version,
         "status": "\n".join(status),
+        "vlans": vlans,
         "link": "\n".join(link),
         "interfaces": "\n".join(intf),
     }

@@ -224,6 +224,8 @@
     .ph-legend > span { display: inline-flex; align-items: center; gap: 5px; }
     .ph-legend .port { width: 30px; height: 20px; line-height: 20px; font-size: 11px; display: inline-block; }
     .print-head ul { margin: 5px 0 0; padding-left: 16px; }
+    .print-head .ph-vlans { margin-top: 5px; }
+    .ph-vlans b { font-size: 12px; }
 
     .stack.has-gutter .members { margin-left: 0; }
     .members { gap: 8px; }
@@ -266,7 +268,8 @@
     .plist th, .plist td { border: 1px solid #000; padding: 4px 6px; text-align: left; color: #000; background: #fff;
                            position: static; white-space: nowrap; }
     .plist th { font-weight: 700; }
-    .plist td.vlan { font-weight: 700; font-size: 12px; }
+    .plist td.vlan b { font-weight: 700; font-size: 12px; }
+    .plist td.vlan span { font-size: 10px; margin-left: 5px; }
     .plist td.desc { white-space: normal; }
     .plist tr { break-inside: avoid; page-break-inside: avoid; height: 24px; }
     .plist .cb { width: 22px; }
@@ -350,6 +353,8 @@
       <span><span class="port shut" data-act="inactive">20</span> Shut down (dashed)</span>
       <span>Dot by the port number: <span class="led led-up"></span> link up now <span class="led"></span> no link <span class="led led-err"></span> err-disabled</span>
     </div>
+    {% if data.vlan_names %}<div class="ph-line ph-vlans"><strong>VLANs:</strong>
+      {% for v, name in data.vlan_names.items() %}<span><b>{{ v }}</b> {{ name }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</div>{% endif %}
     {% if data.warnings %}<ul>{% for w in data.warnings %}<li>{{ w }}</li>{% endfor %}</ul>{% endif %}
   </div>
 
@@ -409,6 +414,10 @@
   function legendKey(v) { return slot(v) === "other" ? "__other" : v; }
   function vlanShort(v) { return v === "trunk" ? "TRK" : v === "routed" ? "RTD" : v; }
   function vlanLong(v) { return v === "trunk" ? "Trunk" : v === "routed" ? "Routed" : "VLAN " + v; }
+  // VLAN names come from 'show vlan brief'. Unnamed VLANs just show their number.
+  var NAMES = D.vlan_names || {};
+  function vlanName(v) { return NAMES[v] || ""; }
+  function vlanFull(v) { return vlanName(v) ? vlanLong(v) + " · " + vlanName(v) : vlanLong(v); }
   function el(tag, cls, text) {
     var e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -424,7 +433,7 @@
     if (f && f.type === "activity" && p.activity !== f.value) return false;
     if (f && f.type === "vlan" && legendKey(p.vlan) !== f.value) return false;
     if (state.q) {
-      var hay = [p.name, p.desc, vlanLong(p.vlan), p.why, "switch " + item.m.number].join(" ").toLowerCase();
+      var hay = [p.name, p.desc, vlanLong(p.vlan), vlanName(p.vlan), p.why, "switch " + item.m.number].join(" ").toLowerCase();
       if (hay.indexOf(state.q) === -1) return false;
     }
     return true;
@@ -572,7 +581,7 @@
         var s = String(v.slot);
         if (s === "other") { other.push(v.vlan); otherCount += v.count; return; }
         var color = s === "trunk" || s === "routed" ? "var(--v-trunk)" : "var(--v" + s + ")";
-        lg.appendChild(chip(vlanLong(v.vlan), v.count, "background:" + color, null, { type: "vlan", value: v.vlan }));
+        lg.appendChild(chip(vlanFull(v.vlan), v.count, "background:" + color, null, { type: "vlan", value: v.vlan }));
       });
       if (other.length) lg.appendChild(chip("Other (" + other.join(", ") + ")", otherCount, "background:var(--v-other)", null,
         { type: "vlan", value: "__other" }));
@@ -593,6 +602,7 @@
     { key: "port", label: "Port", get: function (i) { return i.m.number * 100 + i.p.num; }, show: function (i) { return i.p.name; } },
     { key: "desc", label: "Description", get: function (i) { return i.p.desc; } },
     { key: "vlan", label: "VLAN", get: function (i) { return isNaN(+i.p.vlan) ? 1e6 : +i.p.vlan; }, show: function (i) { return i.p.vlan; }, num: true },
+    { key: "vlanname", label: "VLAN name", get: function (i) { return vlanName(i.p.vlan); } },
     { key: "status", label: "Status", get: function (i) { return STATUS[i.p.status] || i.p.status; } },
     { key: "last", label: "Last active", get: function (i) { return i.p.last_active; } },
     { key: "why", label: "Why", get: function (i) { return i.p.why; }, note: true }
@@ -662,7 +672,7 @@
     if (p.desc) tip.appendChild(el("div", "tip-desc", p.desc));
     var dl = el("dl");
     function row(k, v, soft) { dl.appendChild(el("dt", null, k)); dl.appendChild(el("dd", soft ? "soft" : null, v)); }
-    row("VLAN", vlanLong(p.vlan));
+    row("VLAN", vlanName(p.vlan) ? p.vlan + " · " + vlanName(p.vlan) : vlanLong(p.vlan).replace("VLAN ", ""));
     row("Result", LABEL[p.activity]);
     row("Why", p.why, true);
     if (p.last_active) row("Last active", p.last_active);
@@ -722,10 +732,10 @@
       if (/^[=+\-@]/.test(v)) v = "'" + v;            // keep Excel from running it as a formula
       return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
     }
-    var lines = [["Switch", "Port", "Interface", "Description", "VLAN", "Status", "Result", "Last active", "Why"].join(",")];
+    var lines = [["Switch", "Port", "Interface", "Description", "VLAN", "VLAN name", "Status", "Result", "Last active", "Why"].join(",")];
     all.filter(matches).forEach(function (i) {
       var p = i.p;
-      lines.push([i.m.number, p.num, p.name, p.desc, p.vlan, STATUS[p.status] || p.status,
+      lines.push([i.m.number, p.num, p.name, p.desc, p.vlan, vlanName(p.vlan), STATUS[p.status] || p.status,
                   LABEL[p.activity], p.last_active, p.why].map(cell).join(","));
     });
     var a = document.createElement("a");
@@ -762,7 +772,10 @@
       var cb = el("td", "cb"); cb.appendChild(el("span", "tick")); tr.appendChild(cb);
       tr.appendChild(el("td", null, String(i.m.number)));
       tr.appendChild(el("td", null, i.p.name));
-      tr.appendChild(el("td", "vlan", vlanLong(i.p.vlan).replace("VLAN ", "")));
+      var vt = el("td", "vlan");
+      vt.appendChild(el("b", null, vlanLong(i.p.vlan).replace("VLAN ", "")));
+      if (vlanName(i.p.vlan)) vt.appendChild(el("span", null, vlanName(i.p.vlan)));
+      tr.appendChild(vt);
       tr.appendChild(el("td", null, LABEL[i.p.activity] + (i.p.admin_down ? ", shut" : "") + (i.p.err ? ", err-disabled" : "")));
       tr.appendChild(el("td", "desc", i.p.desc));
       tr.appendChild(el("td", null, i.p.last_active || "never seen"));
