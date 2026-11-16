@@ -107,6 +107,18 @@ def parsers():
     ok &= check("show interfaces status: 'connected' in a description isn't the status",
                 st["Gi1/0/3"]["status"] == "notconnect" and st["Gi1/0/3"]["vlan"] == "50"
                 and st["Gi1/0/4"]["vlan"] == "trunk", st["Gi1/0/3"])
+    names = T.parse_vlan_names("""
+VLAN Name                             Status    Ports
+---- -------------------------------- --------- -------------------------------
+1    default                          active    Gi1/0/1, Gi1/0/2, Gi1/0/3
+                                                Gi1/0/4
+20   STAFF-DATA                       active    Gi1/0/5
+85   VLAN0085                         active
+99   Net Mgmt                         active
+1002 fddi-default                     act/unsup
+""")
+    ok &= check("show vlan brief: names read, wrapped port lines skipped, unnamed VLAN0085 left out",
+                names.get("20") == "STAFF-DATA" and names.get("99") == "Net Mgmt" and "85" not in names, names)
     ok &= check("down times keep how precise they are",
                 T.parse_cisco_duration("26w3d") == (timedelta(weeks=26, days=3), timedelta(days=1))
                 and T.parse_cisco_duration("never") == (None, None))
@@ -169,6 +181,10 @@ def parsers():
                 'id="print"' in html and "@media print" in html and 'id="print-list"' in html)
     ok &= check("print sheet keeps the black boxes even with 'Background graphics' off",
                 "print-color-adjust: exact" in html)
+    d, _ = T.build_stack(demo_outputs(), "x", 6)
+    ok &= check("VLAN names go to the page, only for VLANs on these ports",
+                d["vlan_names"].get("20") == "STAFF-DATA" and "1002" not in d["vlan_names"]
+                and "85" not in d["vlan_names"], d["vlan_names"])
     return ok
 
 
@@ -193,8 +209,8 @@ def end_to_end():
     r = client.post("/api/topology", json={"address": addr, "months": 6, **login}, **base)
     ok &= check("stack read and drawn", r.status_code == 200 and r.json["ok"], r.json)
     page = client.get(r.json["url"], **base)
-    ok &= check("saved page opens", page.status_code == 200 and b"DEMO-IDF-E3" in page.data
-                and b"E Building, E3 IDF" in page.data)
+    ok &= check("saved page opens, with VLAN names", page.status_code == 200 and b"DEMO-IDF-E3" in page.data
+                and b"E Building, E3 IDF" in page.data and b"STUDENT-LAB" in page.data)
     ok &= check("every command was sent", all(c in cli.commands for c in T.COMMANDS.values()), cli.commands)
     r2 = client.post("/api/topology", json={"address": addr, "months": 6, **login}, **base)
     ok &= check("second run remembers the first", b"run 2," in client.get(r2.json["url"], **base).data)
