@@ -280,6 +280,41 @@
   .pick-banner button { margin-left: 12px; font: inherit; font-size: 0.85rem; background: none; border: 1px solid currentColor;
                         color: inherit; border-radius: 4px; padding: 1px 8px; cursor: pointer; }
 
+  /* ---------- Port health: power and slow-connection problems, and the cable test ---------- */
+  .flag { display: inline-block; width: 0; height: 0; flex: none; border-left: 5px solid transparent;
+          border-right: 5px solid transparent; border-bottom: 9px solid #F5B942; }
+  .flag.bad { border-bottom-color: #FF7A6B; }
+  .chip .flag, .key-row .flag { border-bottom-color: var(--check); }
+  .chip .flag.bad, .key-row .flag.bad { border-bottom-color: var(--danger); }
+  .issue { border-left: 3px solid var(--check); background: var(--warn-bg); border-radius: 4px; padding: 7px 10px;
+           margin: 0 0 8px; font-size: 0.86rem; }
+  .issue.bad { border-left-color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, var(--surface)); }
+  .issue strong { display: block; }
+  .notes-list { margin: 0 0 6px; padding-left: 18px; font-size: 0.86rem; color: var(--ink-2); }
+  .tip-issue { color: var(--danger); }
+  .ct-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; margin: 8px 0; }
+  .ct-fields label { display: flex; flex-direction: column; gap: 2px; font-size: 0.8rem; color: var(--ink-2); min-width: 0; }
+  .ct-fields label.wide { grid-column: 1 / -1; }
+  .ct-fields input { font: inherit; font-size: 0.88rem; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px;
+                     background: var(--surface); color: var(--ink); min-width: 0; width: 100%; }
+  .ct-status { color: var(--ink-2); font-size: 0.85rem; }
+  .ct-result { margin-top: 10px; }
+  .verdict { display: flex; gap: 8px; align-items: baseline; font-weight: 600; margin: 0 0 8px; }
+  .verdict-mark { flex: none; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center;
+                  justify-content: center; color: #fff; font-size: 0.8rem; position: relative; top: 4px; }
+  .verdict.good .verdict-mark { background: var(--found); }
+  .verdict.problem .verdict-mark { background: var(--danger); }
+  .verdict.unknown .verdict-mark { background: var(--ink-3); }
+  .pairs { border-collapse: collapse; font-size: 0.86rem; margin: 0 0 8px; width: auto; }
+  .pairs th, .pairs td { padding: 3px 14px 3px 0; border-bottom: 1px solid var(--line-soft); position: static;
+                         background: none; cursor: default; }
+  .pairs td.bad { color: var(--danger); font-weight: 600; }
+  details.raw { font-size: 0.82rem; color: var(--ink-2); margin-top: 6px; }
+  details.raw summary { cursor: pointer; }
+  details.raw pre { margin-top: 6px; }
+  .sample-tag { font-size: 0.75rem; font-weight: 600; border: 1px dashed var(--ink-3); border-radius: 999px; padding: 0 7px;
+                color: var(--ink-2); margin-left: 6px; }
+
   /* ---------- Printing: black and white, landscape, made to be written on ----------
      Active   = solid black box, white VLAN number
      Inactive = empty box, black VLAN number
@@ -366,6 +401,7 @@
     .led-up { background: #000 !important; }
     .led-err { background: #000 !important; border-radius: 0; transform: rotate(45deg); width: 6px; height: 6px; }
     .led-none { visibility: hidden; }
+    .flag, .flag.bad { border-bottom-color: #000 !important; }
 
     #print-list { break-before: page; page-break-before: always; }
     body.print-no-panels #print-list { break-before: auto; page-break-before: auto; }
@@ -392,7 +428,7 @@
   <h1>{{ data.hostname }}</h1>
   <p class="sub">
     {% set units = data.units or 'members' %}{% if data.model %}{{ data.model }} · {% endif %}{{ data.members|length }} {{ units[:-1] if data.members|length == 1 else units }} · ports 1–48 ·
-    {% if data.where %}{{ data.where }} · {% endif %}<span class="mono">{{ data.host }}</span> ·
+    {% if data.where %}{{ data.where }} · {% endif %}{% if data.poe %}PoE {{ '%.0f'|format(data.poe.used) }} of {{ '%.0f'|format(data.poe.available) }} W used · {% endif %}<span class="mono">{{ data.host }}</span> ·
     checked {{ data.generated }}
   </p>
 
@@ -434,6 +470,7 @@
           <option value="inactive,unsure">Inactive and Unsure ports</option>
           <option value="inactive">Inactive ports only</option>
           <option value="all">All ports</option>
+          <option value="issues">Ports with issues (power, slow)</option>
           <option value="">No list</option>
         </select>
       </label>
@@ -459,6 +496,7 @@
       <span><span class="port" data-act="unsure">20</span> Unsure (check it)</span>
       <span><span class="port shut" data-act="inactive">20</span> Shut down (dashed)</span>
       <span>Dot by the port number: <span class="led led-up"></span> link up now <span class="led"></span> no link <span class="led led-err"></span> err-disabled</span>
+      {% if data.issues and data.issues.ports %}<span><span class="flag"></span> Triangle: a power or slow-connection problem (see the list)</span>{% endif %}
     </div>
     {% if data.vlan_names %}<div class="ph-line ph-vlans"><strong>VLANs:</strong>
       {% for v, name in data.vlan_names.items() %}<span><b>{{ v }}</b> {{ name }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</div>{% endif %}
@@ -475,6 +513,7 @@
       <span class="cable-only"><i class="down"></i>stack port down</span>
       <span>Lights: <span class="led led-up"></span> link up now <span class="led led-err"></span> err-disabled <span class="led"></span> no link</span>
       <span>Diagonal line = shut down</span>
+      <span class="issue-key"><span class="flag bad"></span> power or slow-connection problem</span>
       <span><strong>Click a port</strong> to see and copy its config</span>
       <span><strong>Move list</strong> plans many moves to a new switch</span>
     </div>
@@ -571,6 +610,10 @@
   <div class="drawer-body">
     <dl class="facts" id="d-facts"></dl>
 
+    <div id="d-health"></div>
+    <h3>Cable test</h3>
+    <div id="d-cable"></div>
+
     <h3>Configuration</h3>
     <div id="d-config"></div>
 
@@ -631,12 +674,23 @@
   var all = [];
   D.members.forEach(function (m) { m.ports.forEach(function (p) { if (!p.absent) all.push({ m: m, p: p }); }); });
 
+  // Power and slow-connection problems the switch's own counters point to (see port_health in topology.py)
+  var ISSUES = D.issues || { ports: 0, power: 0, slow: 0 };
+  function issuesOf(p) { return p.issues || []; }
+  function issueTitles(p) { return issuesOf(p).map(function (i) { return i.title; }).join(", "); }
+  function worst(p) {
+    var is = issuesOf(p);
+    return !is.length ? "" : is.some(function (i) { return i.level === "bad"; }) ? "bad" : "warn";
+  }
+
   function matches(item) {
     var p = item.p, f = state.filter;
     if (f && f.type === "activity" && p.activity !== f.value) return false;
     if (f && f.type === "vlan" && legendKey(p.vlan) !== f.value) return false;
+    if (f && f.type === "issues" && !issuesOf(p).length) return false;
     if (state.q) {
-      var hay = [p.name, p.desc, vlanLong(p.vlan), vlanName(p.vlan), p.why, UNIT.toLowerCase() + " " + item.m.number].join(" ").toLowerCase();
+      var hay = [p.name, p.desc, vlanLong(p.vlan), vlanName(p.vlan), p.why, UNIT.toLowerCase() + " " + item.m.number,
+                 issueTitles(p), (p.notes || []).join(" ")].join(" ").toLowerCase();
       if (hay.indexOf(state.q) === -1) return false;
     }
     return true;
@@ -653,6 +707,11 @@
     else if (p.up_now) led.classList.add("led-up");
     l.appendChild(led);
     l.appendChild(document.createTextNode(String(p.num)));
+    if (worst(p)) {
+      var f = el("span", "flag" + (worst(p) === "bad" ? " bad" : ""));
+      f.title = issueTitles(p);
+      l.appendChild(f);
+    }
     return l;
   }
   function portTile(m, p) {
@@ -664,7 +723,8 @@
     if (p.admin_down) t.classList.add("shut");
     if (p.err) t.classList.add("err");
     t.textContent = vlanShort(p.vlan);
-    t.setAttribute("aria-label", p.name + ", " + vlanLong(p.vlan) + ", " + LABEL[p.activity]);
+    t.setAttribute("aria-label", p.name + ", " + vlanLong(p.vlan) + ", " + LABEL[p.activity] +
+      (issuesOf(p).length ? ", problem: " + issueTitles(p) : ""));
     t._item = { m: m, p: p };
     tiles.push(t);
     return t;
@@ -678,7 +738,9 @@
       head.appendChild(el("h2", null, unitName(m)));
       if (m.role) head.appendChild(el("span", "role role-" + m.role.toLowerCase(), m.role === "Active" ? "★ Active" : m.role));
       head.appendChild(el("span", "member-meta", [m.model, m.card, m.uptime ? "up " + m.uptime : "",
-        m.state && m.state !== "Ready" ? m.state : ""].filter(Boolean).join(" · ")));
+        m.state && m.state !== "Ready" ? m.state : "",
+        m.poe && m.poe.available ? "PoE " + Math.round(m.poe.used) + " of " + Math.round(m.poe.available) + " W used" : ""
+      ].filter(Boolean).join(" · ")));
       var counts = el("span", "member-counts");
       counts.appendChild(el("b", null, String(m.counts.inactive)));
       counts.appendChild(document.createTextNode(" of " + (m.counts.active + m.counts.inactive + m.counts.unsure) + " unused" +
@@ -790,6 +852,14 @@
         { type: "vlan", value: "__other" }));
       lg.appendChild(el("span", "legend-note", "Solid = active · outline = inactive · striped = unsure"));
     }
+    if (ISSUES.ports) {
+      var parts = [];
+      if (ISSUES.power) parts.push(ISSUES.power + " power");
+      if (ISSUES.slow) parts.push(ISSUES.slow + " slow connection");
+      var ic = chip("Issues", ISSUES.ports, null, "flag bad", { type: "issues", value: "any" });
+      ic.title = parts.join(", ") + ". Click to show only these ports.";
+      lg.appendChild(ic);
+    }
     if (state.filter) {
       var c = el("button", "link", "Clear filter");
       c.type = "button";
@@ -808,6 +878,8 @@
     { key: "vlanname", label: "VLAN name", get: function (i) { return vlanName(i.p.vlan); } },
     { key: "status", label: "Status", get: function (i) { return STATUS[i.p.status] || i.p.status; } },
     { key: "last", label: "Last active", get: function (i) { return i.p.last_active; } },
+    { key: "issues", label: "Issues", get: function (i) { return worst(i.p) === "bad" ? 0 : worst(i.p) ? 1 : 2; },
+      show: function (i) { return issueTitles(i.p); } },
     { key: "why", label: "Why", get: function (i) { return i.p.why; }, note: true }
   ];
   function renderHead() {
@@ -883,6 +955,11 @@
     row("Status", STATUS[p.status] || p.status);
     var speed = [p.speed, p.duplex].filter(function (s) { return s && s !== "auto"; }).join(" / ");
     if (speed) row("Speed", speed, true);
+    (p.notes || []).forEach(function (n) { if (/^Powering /.test(n)) row("Power", n.replace(/^Powering /, ""), true); });
+    issuesOf(p).forEach(function (i, n) {
+      dl.appendChild(el("dt", null, n ? "" : issuesOf(p).length > 1 ? "Issues" : "Issue"));
+      dl.appendChild(el("dd", "tip-issue", "\u25B2 " + i.title));
+    });
     tip.appendChild(dl);
     var mi = moveMode ? moveIndex(p) : -1;
     tip.appendChild(el("div", "tip-hint", picking ? "Click to paste onto this port"
@@ -940,11 +1017,13 @@
       if (/^[=+\-@]/.test(v)) v = "'" + v;            // keep Excel from running it as a formula
       return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
     }
-    var lines = [[UNIT, "Port", "Interface", "Description", "VLAN", "VLAN name", "Status", "Result", "Last active", "Why"].join(",")];
+    var lines = [[UNIT, "Port", "Interface", "Description", "VLAN", "VLAN name", "Status", "Result", "Last active", "Why",
+                  "Issues", "Power"].join(",")];
     all.filter(matches).forEach(function (i) {
       var p = i.p;
+      var power = (p.notes || []).filter(function (n) { return /^Powering /.test(n); }).join("; ").replace(/^Powering /, "");
       lines.push([i.m.number, p.num, p.name, p.desc, p.vlan, vlanName(p.vlan), STATUS[p.status] || p.status,
-                  LABEL[p.activity], p.last_active, p.why].map(cell).join(","));
+                  LABEL[p.activity], p.last_active, p.why, issueTitles(p), power].map(cell).join(","));
     });
     var a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([lines.join("\r\n")], { type: "text/csv" }));
@@ -1073,6 +1152,222 @@
     ((p.copy && p.copy[vendor] && p.copy[vendor].notes) || []).forEach(function (n) { notes.appendChild(el("p", "warn-line", n)); });
   }
 
+  // ---- port health and the cable test ----
+  var SERVED = /^https?:$/.test(location.protocol);     // the cable test needs the app; a saved .html file can't run it
+  var SAMPLE = /^demo-/.test(D.host);                   // made-up stack: show a made-up result
+  var CHASSIS = UNIT === "Slot";
+  var cableResults = {};                                // port -> last result, for this visit only
+  var testing = {};                                     // port -> true while its test runs
+  var typed = { password: "", secret: "" };             // typed once per visit; never saved anywhere
+  function recall(k) { try { return localStorage.getItem("pa." + k) || ""; } catch (e) { return ""; } }
+  function remember(k, v) { try { localStorage.setItem("pa." + k, v); } catch (e) { /* private window */ } }
+  function powered(p) {
+    var n = (p.notes || []).filter(function (x) { return /^Powering /.test(x); })[0];
+    return n ? n.replace(/^Powering /, "").split(" \u00B7 ")[0] : "";
+  }
+
+  function renderHealth(p) {
+    var box = document.getElementById("d-health");
+    box.textContent = "";
+    var issues = issuesOf(p), notes = p.notes || [];
+    if (!D.issues) return;                               // drawn before health checks existed
+    box.appendChild(el("h3", null, "Health"));
+    if (!issues.length) box.appendChild(el("p", "muted", p.up_now || notes.length
+      ? "No power or slow-connection problems seen on this port."
+      : "Nothing to check: no link on this port."));
+    issues.forEach(function (i) {
+      var d = el("div", "issue " + i.level);
+      d.appendChild(el("strong", null, i.title));
+      d.appendChild(el("span", null, i.text));
+      box.appendChild(d);
+    });
+    if (notes.length) {
+      var ul = el("ul", "notes-list");
+      notes.forEach(function (n) { ul.appendChild(el("li", null, n)); });
+      box.appendChild(ul);
+    }
+    if (D.vendor === DELL && p.up_now) box.appendChild(el("p", "muted", "Dell drawings don't include error counters. " +
+      "The cable test reads them for this port."));
+  }
+
+  function statusWord(s) {
+    if (/^(normal|ok|good|terminated)$/.test(s)) return "Good";
+    if (/^open/.test(s)) return "Open (break)";
+    if (/^short/.test(s)) return "Short";
+    if (/imped/.test(s)) return "Damaged (impedance)";
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+  function renderResult(box, r) {
+    box.textContent = "";
+    if (!r) return;
+    if (r.problems) {
+      var d = el("div", "issue bad");
+      d.appendChild(el("strong", null, "The cable test didn't run"));
+      d.appendChild(el("span", null, r.problems.join(" ")));
+      box.appendChild(d);
+    } else {
+      var v = el("p", "verdict " + r.verdict);
+      v.appendChild(el("span", "verdict-mark", r.verdict === "good" ? "\u2713" : r.verdict === "problem" ? "\u2715" : "?"));
+      v.appendChild(el("span", null, r.summary));
+      box.appendChild(v);
+      if (r.pairs && r.pairs.length) {
+        var t = el("table", "pairs"), hr = el("tr");
+        ["Pair", "Length", "Result"].forEach(function (h) { hr.appendChild(el("th", null, h)); });
+        t.appendChild(hr);
+        r.pairs.forEach(function (pr) {
+          var tr = el("tr");
+          tr.appendChild(el("td", null, pr.pair || "Cable"));
+          tr.appendChild(el("td", null, pr.length === null || pr.length === undefined ? "\u2013" : "about " + pr.length + " m"));
+          tr.appendChild(el("td", statusWord(pr.status) === "Good" ? null : "bad", statusWord(pr.status)));
+          t.appendChild(tr);
+        });
+        box.appendChild(t);
+      }
+      (r.issues || []).forEach(function (i) {
+        var d2 = el("div", "issue " + i.level);
+        d2.appendChild(el("strong", null, i.title + " (read just now)"));
+        d2.appendChild(el("span", null, i.text));
+        box.appendChild(d2);
+      });
+      if (r.notes && r.notes.length) {
+        var ul = el("ul", "notes-list");
+        r.notes.forEach(function (n) { ul.appendChild(el("li", null, n)); });
+        box.appendChild(ul);
+      }
+      var when = el("p", "muted", "Tested " + r.checked);
+      if (r.sample) when.appendChild(el("span", "sample-tag", "made-up sample"));
+      box.appendChild(when);
+    }
+    if (r.raw) {
+      var det = el("details", "raw");
+      det.appendChild(el("summary", null, "What the switch said"));
+      det.appendChild(el("pre", "cfg", r.raw));
+      box.appendChild(det);
+    }
+  }
+
+  // The made-up stack has no switch behind it, so its cable test makes up a believable answer
+  function sampleResult(p) {
+    var len = 8 + (p.num * 7 + p.name.length * 3) % 60, pairs = ["A", "B", "C", "D"];
+    var now = new Date();
+    function two(n) { return (n < 10 ? "0" : "") + n; }
+    var titles = issueTitles(p), r = { sample: true, checked: now.getFullYear() + "-" + two(now.getMonth() + 1) + "-" +
+                                       two(now.getDate()) + " " + two(now.getHours()) + ":" + two(now.getMinutes()),
+                                       issues: [], notes: [], raw: "(made-up sample: no switch was contacted)" };
+    if (/Receive errors|10 Mb|Half duplex/.test(titles)) {
+      r.pairs = pairs.map(function (x) { return { pair: x, length: x === "C" ? len - 6 : len, status: x === "C" ? "impedance mismatch" : "normal" }; });
+      r.verdict = "problem";
+      r.summary = "Pair C is mismatched (impedance) at about " + (len - 6) + " m: damaged or poor-quality cable, or a bad " +
+        "patch cord or jack there. Causes errors and slow speeds.";
+    } else if (/PoE fault/.test(titles)) {
+      r.pairs = pairs.map(function (x) { return { pair: x, length: x === "B" ? 2 : len, status: x === "B" ? "short" : "normal" }; });
+      r.verdict = "problem";
+      r.summary = "Pair B is shorted at about 2 m: wires touching. Re-terminate or replace the cable.";
+    } else if (!p.up_now) {
+      r.pairs = pairs.map(function (x) { return { pair: x, length: len, status: "open" }; });
+      r.verdict = "problem";
+      r.summary = "All pairs are open at about " + len + " m: a break or loose connection there. If the run is about " +
+        len + " m long, nothing is plugged in at the far end (wall jack or device).";
+    } else {
+      r.pairs = pairs.map(function (x) { return { pair: x, length: len, status: "normal" }; });
+      r.verdict = "good";
+      r.summary = "Cable looks good: about " + len + " m long.";
+    }
+    return r;
+  }
+
+  function renderCable(item) {
+    var p = item.p, box = document.getElementById("d-cable");
+    box.textContent = "";
+    box.appendChild(el("p", "muted", "Checks the copper cable for breaks, shorts and damage, and roughly how long it is."));
+    if (!SERVED) {
+      box.appendChild(el("p", "warn-line", "Open this drawing from the Port Analyzer app (Stack topology page) to run a cable test."));
+      return;
+    }
+    if (/^(Te|Fo|Hu|Twe|te|fo)/.test(p.name) || /SFP|fiber|10G|1000BaseSX|1000BaseLX/i.test(p.ptype || "")) {
+      box.appendChild(el("p", "warn-line", "This looks like a fiber or 10G port. Most switches can only test copper " +
+        "gigabit ports, so the switch will probably refuse."));
+    }
+    if (p.admin_down) box.appendChild(el("p", "muted", "This port is shut down. Some switches won't test a shut port; " +
+      "if this one refuses, run no shutdown on it first."));
+    var device = powered(p);
+    var who = p.desc ? "\u201C" + p.desc + "\u201D" : device || "the device";
+    var risky = p.up_now || !!device;
+    if (risky) {
+      var downtime = CHASSIS ? "about a minute" : "about 6 seconds";
+      box.appendChild(el("p", "warn-line", "This interrupts " + who + ": the link drops for " + downtime +
+        (device ? " and the power is cut, so the " + device + " restarts (another minute or two)" : "") +
+        ". Best done when nobody is using it."));
+    } else {
+      box.appendChild(el("p", "muted", "Nothing is linked on this port right now, so testing it won't interrupt anyone."));
+    }
+
+    var fields = el("div", "ct-fields");
+    function field(label, type, value, wide, auto) {
+      var l = el("label", wide ? "wide" : null), i = el("input");
+      l.appendChild(document.createTextNode(label));
+      i.type = type; i.value = value; i.autocomplete = auto || "off"; i.spellcheck = false;
+      l.appendChild(i);
+      fields.appendChild(l);
+      return i;
+    }
+    var user = field("Username", "text", recall("user"), false, "username");
+    var pass = field("Password", "password", typed.password, false, "current-password");
+    var secret = field("Enable password (if different)", "password", typed.secret, true);
+    if (!SAMPLE) box.appendChild(fields);
+
+    var ok = null;
+    if (risky) {
+      var lab = el("label", "check");
+      ok = el("input"); ok.type = "checkbox";
+      lab.appendChild(ok);
+      lab.appendChild(el("span", null, "I understand " + p.name + " loses its connection for a moment."));
+      box.appendChild(lab);
+    }
+    var row = el("div", "btn-row");
+    var run = el("button", "btn primary", "Run cable test");
+    run.type = "button";
+    var msg = el("span", "ct-status");
+    row.appendChild(run); row.appendChild(msg);
+    box.appendChild(row);
+    var out = el("div", "ct-result");
+    box.appendChild(out);
+    renderResult(out, cableResults[p.name]);
+
+    function sync() { run.disabled = !!testing[p.name] || (ok && !ok.checked); }
+    if (ok) ok.addEventListener("change", sync);
+    sync();
+    if (testing[p.name]) { run.textContent = "Testing\u2026"; msg.textContent = "Still running\u2026"; }
+    run.addEventListener("click", function () {
+      if (SAMPLE) {
+        cableResults[p.name] = sampleResult(p);
+        renderResult(out, cableResults[p.name]);
+        return;
+      }
+      typed.password = pass.value; typed.secret = secret.value;
+      if (!pass.value) { msg.textContent = "Enter the password."; pass.focus(); return; }
+      remember("user", user.value.trim());
+      testing[p.name] = true; sync();
+      run.textContent = "Testing\u2026";
+      msg.textContent = "Can take up to " + (CHASSIS ? "two minutes" : "a minute") + ".";
+      out.textContent = "";
+      var body = { address: D.host, vendor: D.vendor, protocol: D.protocol || "", chassis: CHASSIS, port: p.name,
+                   username: user.value.trim(), password: pass.value, secret: secret.value };
+      fetch("/api/topology/cable-test", { method: "POST", headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify(body) })
+        .then(function (r) { return r.json().catch(function () { return { problems: ["The app gave an unexpected answer (" + r.status + ")."] }; }); })
+        .then(function (data) {
+          cableResults[p.name] = data.ok ? data : { problems: data.problems || ["The cable test didn't run."], raw: data.raw };
+        }, function () {
+          cableResults[p.name] = { problems: ["Couldn't reach the Port Analyzer app. Is it still running?"] };
+        })
+        .then(function () {
+          testing[p.name] = false;
+          if (current && current.p === p) renderCable(current);   // panel still on this port: show the answer
+        });
+    });
+  }
+
   function openPanel(item) {
     var p = item.p, m = item.m;
     if (!current || current.p !== p) document.getElementById("d-target").value = "";   // new source: start with a blank target
@@ -1088,6 +1383,8 @@
     fact("Result", LABEL[p.activity] + " - " + p.why);
     fact("Status", STATUS[p.status] || p.status);
     fact("Last active", p.last_active);
+    renderHealth(p);
+    renderCable(item);
 
     var box = document.getElementById("d-config");
     box.textContent = "";
@@ -1491,8 +1788,11 @@
     box.textContent = "";
     if (!which) return;
     var wanted = which === "all" ? null : which.split(",");
-    var rows = all.filter(function (i) { return !wanted || wanted.indexOf(i.p.activity) !== -1; });
-    var title = which === "all" ? "All ports" : which === "inactive" ? "Inactive ports" : "Inactive and Unsure ports";
+    var rows = all.filter(function (i) {
+      return which === "issues" ? issuesOf(i.p).length > 0 : !wanted || wanted.indexOf(i.p.activity) !== -1;
+    });
+    var title = which === "all" ? "All ports" : which === "inactive" ? "Inactive ports" :
+      which === "issues" ? "Ports with issues" : "Inactive and Unsure ports";
     box.appendChild(el("h2", null, title + " · " + D.hostname + " · " + rows.length + " port" + (rows.length === 1 ? "" : "s")));
     var table = el("table", "plist");
     var hr = el("tr");
@@ -1509,7 +1809,8 @@
       vt.appendChild(el("b", null, vlanLong(i.p.vlan).replace("VLAN ", "")));
       if (vlanName(i.p.vlan)) vt.appendChild(el("span", null, vlanName(i.p.vlan)));
       tr.appendChild(vt);
-      tr.appendChild(el("td", null, LABEL[i.p.activity] + (i.p.admin_down ? ", shut" : "") + (i.p.err ? ", err-disabled" : "")));
+      tr.appendChild(el("td", "desc", LABEL[i.p.activity] + (i.p.admin_down ? ", shut" : "") + (i.p.err ? ", err-disabled" : "") +
+        (issuesOf(i.p).length ? " \u25B2 " + issueTitles(i.p) : "")));
       tr.appendChild(el("td", "desc", i.p.desc));
       tr.appendChild(el("td", null, i.p.last_active || "never seen"));
       tr.appendChild(el("td", "notes", ""));
@@ -1523,6 +1824,7 @@
   document.getElementById("po-go").addEventListener("click", function () { buildPrintList(); window.print(); });
   window.addEventListener("beforeprint", buildPrintList);   // Ctrl+P gets the same sheet
 
+  if (!ISSUES.ports) document.querySelector(".issue-key").hidden = true;
   if (hasStackInfo) stackEl.classList.add("has-gutter");
   else Array.prototype.forEach.call(document.querySelectorAll(".cable-only"), function (e) { e.hidden = true; });
   renderMembers();
