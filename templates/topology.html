@@ -391,7 +391,7 @@
   <a class="back" href="/topology" id="back" hidden>&larr; Stack topology</a>
   <h1>{{ data.hostname }}</h1>
   <p class="sub">
-    {{ data.members|length }} member{{ '' if data.members|length == 1 else 's' }} · ports 1–48 ·
+    {% set units = data.units or 'members' %}{% if data.model %}{{ data.model }} · {% endif %}{{ data.members|length }} {{ units[:-1] if data.members|length == 1 else units }} · ports 1–48 ·
     {% if data.where %}{{ data.where }} · {% endif %}<span class="mono">{{ data.host }}</span> ·
     checked {{ data.generated }}
   </p>
@@ -449,7 +449,7 @@
   <div class="print-only print-head">
     <div class="ph-title">{{ data.hostname }}
       <span>{% if data.where %}· {{ data.where }} {% endif %}· {{ data.host }} · checked {{ data.generated }}</span></div>
-    <div class="ph-line">{{ data.members|length }} member{{ '' if data.members|length == 1 else 's' }}, ports 1–48:
+    <div class="ph-line">{% set units = data.units or 'members' %}{{ data.members|length }} {{ units[:-1] if data.members|length == 1 else units }}, ports 1–48:
       <strong>{{ data.summary.active }}</strong> active, <strong>{{ data.summary.inactive }}</strong> inactive,
       <strong>{{ data.summary.unsure }}</strong> unsure. Active = used in the last {{ '%g'|format(data.months) }} months.
       Number in each box = VLAN.</div>
@@ -604,6 +604,8 @@
   var root = document.getElementById("root");
   var state = { view: "plate", color: "activity", q: "", filter: null, sort: { key: "port", dir: 1 } };
   var LABEL = { active: "Active", inactive: "Inactive", unsure: "Unsure" };
+  var UNIT = D.unit || "Switch";           // "Slot" on a chassis like a 4507
+  function unitName(m) { return UNIT + " " + m.number; }
   var STATUS = { connected: "Link up", notconnect: "No link", disabled: "Shut down",
                  "err-disabled": "Err-disabled", "err-disable": "Err-disabled" };
 
@@ -634,7 +636,7 @@
     if (f && f.type === "activity" && p.activity !== f.value) return false;
     if (f && f.type === "vlan" && legendKey(p.vlan) !== f.value) return false;
     if (state.q) {
-      var hay = [p.name, p.desc, vlanLong(p.vlan), vlanName(p.vlan), p.why, "switch " + item.m.number].join(" ").toLowerCase();
+      var hay = [p.name, p.desc, vlanLong(p.vlan), vlanName(p.vlan), p.why, UNIT.toLowerCase() + " " + item.m.number].join(" ").toLowerCase();
       if (hay.indexOf(state.q) === -1) return false;
     }
     return true;
@@ -673,9 +675,9 @@
       var card = el("section", "member");
       card.dataset.member = m.number;
       var head = el("header", "member-head");
-      head.appendChild(el("h2", null, "Switch " + m.number));
+      head.appendChild(el("h2", null, unitName(m)));
       if (m.role) head.appendChild(el("span", "role role-" + m.role.toLowerCase(), m.role === "Active" ? "★ Active" : m.role));
-      head.appendChild(el("span", "member-meta", [m.model, m.uptime ? "up " + m.uptime : "",
+      head.appendChild(el("span", "member-meta", [m.model, m.card, m.uptime ? "up " + m.uptime : "",
         m.state && m.state !== "Ready" ? m.state : ""].filter(Boolean).join(" · ")));
       var counts = el("span", "member-counts");
       counts.appendChild(el("b", null, String(m.counts.inactive)));
@@ -799,7 +801,7 @@
   // ---- table ----
   var COLS = [
     { key: "activity", label: "Result", get: function (i) { return ["inactive", "unsure", "active"].indexOf(i.p.activity); } },
-    { key: "switch", label: "Switch", get: function (i) { return i.m.number; }, num: true },
+    { key: "switch", label: UNIT, get: function (i) { return i.m.number; }, num: true },
     { key: "port", label: "Port", get: function (i) { return i.m.number * 100 + i.p.num; }, show: function (i) { return i.p.name; } },
     { key: "desc", label: "Description", get: function (i) { return i.p.desc; } },
     { key: "vlan", label: "VLAN", get: function (i) { return isNaN(+i.p.vlan) ? 1e6 : +i.p.vlan; }, show: function (i) { return i.p.vlan; }, num: true },
@@ -869,7 +871,7 @@
     tip.textContent = "";
     var head = el("div", "tip-head");
     head.appendChild(el("strong", null, p.name));
-    head.appendChild(el("span", "tip-sub", "Switch " + item.m.number + ", port " + p.num));
+    head.appendChild(el("span", "tip-sub", unitName(item.m) + ", port " + p.num));
     tip.appendChild(head);
     if (p.desc) tip.appendChild(el("div", "tip-desc", p.desc));
     var dl = el("dl");
@@ -938,7 +940,7 @@
       if (/^[=+\-@]/.test(v)) v = "'" + v;            // keep Excel from running it as a formula
       return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
     }
-    var lines = [["Switch", "Port", "Interface", "Description", "VLAN", "VLAN name", "Status", "Result", "Last active", "Why"].join(",")];
+    var lines = [[UNIT, "Port", "Interface", "Description", "VLAN", "VLAN name", "Status", "Result", "Last active", "Why"].join(",")];
     all.filter(matches).forEach(function (i) {
       var p = i.p;
       lines.push([i.m.number, p.num, p.name, p.desc, p.vlan, vlanName(p.vlan), STATUS[p.status] || p.status,
@@ -1077,7 +1079,7 @@
     current = item;
     mark("selected", item);
     document.getElementById("d-name").textContent = ifName(p);
-    document.getElementById("d-sub").textContent = "Switch " + m.number + ", port " + p.num + " · " + D.hostname;
+    document.getElementById("d-sub").textContent = unitName(m) + ", port " + p.num + " · " + D.hostname;
     var facts = document.getElementById("d-facts");
     facts.textContent = "";
     function fact(k, v) { if (v) { facts.appendChild(el("dt", null, k)); facts.appendChild(el("dd", null, v)); } }
@@ -1432,7 +1434,7 @@
     var add = document.getElementById("mv-add");
     add.appendChild(el("option", null, "Add active ports from…")).value = "";
     add.appendChild(el("option", null, "the whole stack")).value = "all";
-    D.members.forEach(function (m) { add.appendChild(el("option", null, "Switch " + m.number)).value = String(m.number); });
+    D.members.forEach(function (m) { add.appendChild(el("option", null, unitName(m))).value = String(m.number); });
     add.appendChild(el("option", null, "ports matching the filter / search")).value = "shown";
     add.addEventListener("change", function () { if (add.value) addActive(add.value); add.value = ""; });
     document.getElementById("move-btn").addEventListener("click", function () { setMoveMode(!moveMode); });
@@ -1460,7 +1462,7 @@
     });
     document.getElementById("mv-csv").addEventListener("click", function () {
       var t = targets();
-      var lines = [["#", "Old switch", "Old port", "Old interface", "New port", "VLAN", "VLAN name", "Description", "Result",
+      var lines = [["#", "Old " + UNIT.toLowerCase(), "Old port", "Old interface", "New port", "VLAN", "VLAN name", "Description", "Result",
                     "Not carried over"].join(",")];
       moves.forEach(function (mv, i) {
         var p = mv.item.p;
@@ -1494,7 +1496,7 @@
     box.appendChild(el("h2", null, title + " · " + D.hostname + " · " + rows.length + " port" + (rows.length === 1 ? "" : "s")));
     var table = el("table", "plist");
     var hr = el("tr");
-    [["", "cb"], ["Switch"], ["Port"], ["VLAN"], ["Result"], ["Description"], ["Last active"], ["Notes", "notes"]]
+    [["", "cb"], [UNIT], ["Port"], ["VLAN"], ["Result"], ["Description"], ["Last active"], ["Notes", "notes"]]
       .forEach(function (h) { hr.appendChild(el("th", h[1] || null, h[0])); });
     var thead = el("thead"); thead.appendChild(hr); table.appendChild(thead);
     var tb = el("tbody");

@@ -80,7 +80,7 @@ Click a switch to see only its ports. The table below starts on **Inactive** por
 
 ## Stack topology
 
-Click **Stack topology** at the top of the page to draw one **Cisco Catalyst** or **Dell PowerConnect 5500** (5524, 5548, 5548P) stack. Every member is drawn as its own front panel with ports 1–48, and each port shows its VLAN. Color the ports by **Use** (green in use, empty socket unused, amber can't tell) or by **VLAN**. The stack cables between members are drawn on the left, and you get a warning if the stack ring is broken.
+Click **Stack topology** at the top of the page to draw one **Cisco Catalyst** or **Dell PowerConnect 5500** (5524, 5548, 5548P) stack. A chassis such as a Catalyst 4506/4507 is drawn slot by slot, each line card as its own panel. Every member is drawn as its own front panel with ports 1–48, and each port shows its VLAN. Color the ports by **Use** (green in use, empty socket unused, amber can't tell) or by **VLAN**. The stack cables between members are drawn on the left, and you get a warning if the stack ring is broken.
 
 1. Pick a Cisco or Dell switch from your switch list, or choose **Another address…** and type one (and pick its type).
 2. Enter your login and click **Draw stack**.
@@ -148,7 +148,7 @@ Wrong username or password, or the switch wants an enable password. If the Nexus
 Wrong address, the wrong SSH/Telnet choice, or a firewall in the way. Check that you can reach it from your PC with PuTTY using the same settings.
 
 **"Read the switch, but no ports could be read. Is the type right?"**
-The app logged in but didn't recognise what the switch printed. The type is usually wrong; try **Test login** with another type. If the type is right, the switch printed something in a layout the app hasn't seen. What it printed is saved in `data\debug\`; send that file to whoever maintains this repo.
+The app logged in but didn't recognise what the switch printed. (The Stack topology page says "couldn't place any of them as front-panel ports" for the same kind of problem.) The type is usually wrong; try **Test login** with another type. If the type is right, the switch printed something in a layout the app hasn't seen. What it printed is saved in `data\debug\` (Stack topology saves `<address>-topology-<type>.txt` there too, with the passwords already taken out of the config); send that file to whoever maintains this repo.
 
 **A full run is slow**
 Each switch takes a few seconds, and one that doesn't answer waits for the login timeout. Raise **Switches at once** under **More settings** (for example to 20), or check one building.
