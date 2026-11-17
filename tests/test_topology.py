@@ -203,6 +203,8 @@ end
                 'id="print"' in html and "@media print" in html and 'id="print-list"' in html)
     ok &= check("print sheet keeps the black boxes even with 'Background graphics' off",
                 "print-color-adjust: exact" in html)
+    ok &= check("move list: button, dock, script/CSV/print outputs",
+                all(f'id="{i}"' in html for i in ("move-btn", "dock", "mv-start", "mv-copy", "mv-csv", "mv-print", "move-print")))
     d, _ = T.build_stack(demo_outputs(), "x", 6)
     ok &= check("VLAN names go to the page, only for VLANs on these ports",
                 d["vlan_names"].get("20") == "STAFF-DATA" and "1002" not in d["vlan_names"]
