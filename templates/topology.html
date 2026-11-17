@@ -401,7 +401,7 @@
     .led-up { background: #000 !important; }
     .led-err { background: #000 !important; border-radius: 0; transform: rotate(45deg); width: 6px; height: 6px; }
     .led-none { visibility: hidden; }
-    .flag, .flag.bad { border-bottom-color: #000 !important; }
+    .flag { display: none !important; }      /* problems are for the screen; the sheet is for organizing */
 
     #print-list { break-before: page; page-break-before: always; }
     body.print-no-panels #print-list { break-before: auto; page-break-before: auto; }
@@ -470,7 +470,6 @@
           <option value="inactive,unsure">Inactive and Unsure ports</option>
           <option value="inactive">Inactive ports only</option>
           <option value="all">All ports</option>
-          <option value="issues">Ports with issues (power, slow)</option>
           <option value="">No list</option>
         </select>
       </label>
@@ -496,7 +495,6 @@
       <span><span class="port" data-act="unsure">20</span> Unsure (check it)</span>
       <span><span class="port shut" data-act="inactive">20</span> Shut down (dashed)</span>
       <span>Dot by the port number: <span class="led led-up"></span> link up now <span class="led"></span> no link <span class="led led-err"></span> err-disabled</span>
-      {% if data.issues and data.issues.ports %}<span><span class="flag"></span> Triangle: a power or slow-connection problem (see the list)</span>{% endif %}
     </div>
     {% if data.vlan_names %}<div class="ph-line ph-vlans"><strong>VLANs:</strong>
       {% for v, name in data.vlan_names.items() %}<span><b>{{ v }}</b> {{ name }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</div>{% endif %}
@@ -610,10 +608,6 @@
   <div class="drawer-body">
     <dl class="facts" id="d-facts"></dl>
 
-    <div id="d-health"></div>
-    <h3>Cable test</h3>
-    <div id="d-cable"></div>
-
     <h3>Configuration</h3>
     <div id="d-config"></div>
 
@@ -635,6 +629,10 @@
       <div id="d-notes"></div>
       <div class="btn-row"><button type="button" class="btn primary" id="d-copy-script">Copy for the new port</button><span class="copied" id="d-copied-script"></span></div>
     </div>
+
+    <div id="d-health"></div>
+    <h3>Cable test</h3>
+    <div id="d-cable"></div>
   </div>
 </aside>
 <div class="pick-banner" id="pick-banner" hidden>Click the port to paste onto <button type="button" id="pick-cancel">Cancel</button></div>
@@ -1788,11 +1786,8 @@
     box.textContent = "";
     if (!which) return;
     var wanted = which === "all" ? null : which.split(",");
-    var rows = all.filter(function (i) {
-      return which === "issues" ? issuesOf(i.p).length > 0 : !wanted || wanted.indexOf(i.p.activity) !== -1;
-    });
-    var title = which === "all" ? "All ports" : which === "inactive" ? "Inactive ports" :
-      which === "issues" ? "Ports with issues" : "Inactive and Unsure ports";
+    var rows = all.filter(function (i) { return !wanted || wanted.indexOf(i.p.activity) !== -1; });
+    var title = which === "all" ? "All ports" : which === "inactive" ? "Inactive ports" : "Inactive and Unsure ports";
     box.appendChild(el("h2", null, title + " · " + D.hostname + " · " + rows.length + " port" + (rows.length === 1 ? "" : "s")));
     var table = el("table", "plist");
     var hr = el("tr");
@@ -1809,8 +1804,7 @@
       vt.appendChild(el("b", null, vlanLong(i.p.vlan).replace("VLAN ", "")));
       if (vlanName(i.p.vlan)) vt.appendChild(el("span", null, vlanName(i.p.vlan)));
       tr.appendChild(vt);
-      tr.appendChild(el("td", "desc", LABEL[i.p.activity] + (i.p.admin_down ? ", shut" : "") + (i.p.err ? ", err-disabled" : "") +
-        (issuesOf(i.p).length ? " \u25B2 " + issueTitles(i.p) : "")));
+      tr.appendChild(el("td", null, LABEL[i.p.activity] + (i.p.admin_down ? ", shut" : "") + (i.p.err ? ", err-disabled" : "")));
       tr.appendChild(el("td", "desc", i.p.desc));
       tr.appendChild(el("td", null, i.p.last_active || "never seen"));
       tr.appendChild(el("td", "notes", ""));
