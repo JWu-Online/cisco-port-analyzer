@@ -89,6 +89,8 @@ def demo_outputs():
     recent_tokens = ["1w2d", "2w5d", "4w1d", "6w3d", "9w0d", "13w4d", "17w2d"]
     old_tokens = ["38w2d", "44w6d", "52w1d"]
 
+    run = []          # 'show running-config | section ^interface'
+
     for num, port, vlan, kind, desc, boot_token in _ports():
         short = f"Gi{num}/0/{port}"
         long_ = f"GigabitEthernet{num}/0/{port}"
@@ -119,6 +121,19 @@ def demo_outputs():
             "disabled": "is administratively down, line protocol is down (disabled)",
             "err-disabled": "is down, line protocol is down (err-disabled)",
         }[st]
+        run.append(f"interface {long_}")
+        if desc:
+            run.append(f" description {desc}")
+        if vlan == "trunk":
+            run += [" switchport trunk native vlan 60", " switchport trunk allowed vlan 60,99", " switchport mode trunk"]
+        else:
+            run += [f" switchport access vlan {vlan}", " switchport mode access"]
+            if vlan in ("20", "21"):
+                run.append(" switchport voice vlan 40")
+            run += [" spanning-tree portfast", " spanning-tree bpduguard enable"]
+        if kind == "shut":
+            run.append(" shutdown")
+        run.append("!")
         intf += [
             f"{long_} {head} ",
             f"  Hardware is Gigabit Ethernet, address is 0c11.aa00.{num:02d}{port:02d} (bia 0c11.aa00.{num:02d}{port:02d})",
@@ -232,6 +247,9 @@ def demo_outputs():
         "version": version,
         "status": "\n".join(status),
         "vlans": vlans,
+        "config": "\n".join(run + [
+            "interface TenGigabitEthernet1/1/1", " description UPLINK-CORE", " switchport mode trunk", "!",
+            "interface Vlan99", " ip address 10.99.4.11 255.255.255.0", "!"]),
         "link": "\n".join(link),
         "interfaces": "\n".join(intf),
     }

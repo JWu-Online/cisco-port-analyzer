@@ -119,6 +119,28 @@ VLAN Name                             Status    Ports
 """)
     ok &= check("show vlan brief: names read, wrapped port lines skipped, unnamed VLAN0085 left out",
                 names.get("20") == "STAFF-DATA" and names.get("99") == "Net Mgmt" and "85" not in names, names)
+    cfg = T.parse_interface_configs("""Building configuration...
+!
+hostname LAB
+username netops privilege 15 secret 9 $9$FAKEHASH
+!
+interface GigabitEthernet1/0/1
+ description Rm 2 password-reset kiosk
+ switchport access vlan 20
+ ip ospf message-digest-key 1 md5 7 0822455D0A16
+!
+interface GigabitEthernet1/0/2
+!
+line vty 0 4
+ password 7 FAKE
+end
+""")
+    ok &= check("running-config: only interface sections kept",
+                set(cfg) == {"Gi1/0/1", "Gi1/0/2"} and cfg["Gi1/0/1"]["ifname"] == "GigabitEthernet1/0/1"
+                and cfg["Gi1/0/2"]["lines"] == [], cfg)
+    ok &= check("running-config: a port line with a key is left out, a description isn't",
+                cfg["Gi1/0/1"]["removed"] == 1 and "0822455D0A16" not in str(cfg)
+                and " description Rm 2 password-reset kiosk" in cfg["Gi1/0/1"]["lines"], cfg["Gi1/0/1"])
     ok &= check("down times keep how precise they are",
                 T.parse_cisco_duration("26w3d") == (timedelta(weeks=26, days=3), timedelta(days=1))
                 and T.parse_cisco_duration("never") == (None, None))
@@ -191,7 +213,16 @@ VLAN Name                             Status    Ports
 def end_to_end():
     ok = True
     print("\nDrawing a pretend stack through the web app")
-    cmds = {cmd: demo_outputs()[key] for key, cmd in T.COMMANDS.items()}
+    demo, cmds = demo_outputs(), {}
+    for key, cmd in T.COMMANDS.items():
+        if isinstance(cmd, tuple):
+            # This pretend switch is too old for '| section', so the tool falls back to the full
+            # config. Its passwords and SNMP community must not end up on the page.
+            cmds[cmd[-1]] = ("Building configuration...\n!\nhostname DEMO-IDF-E3\n"
+                             "username netops privilege 15 secret 9 $9$FAKE-SECRET-HASH\n!\n" + demo[key] +
+                             "\nsnmp-server community FAKE-COMMUNITY RO\nend\n")
+        else:
+            cmds[cmd] = demo[key]
     cli = MockCLI("DEMO-IDF-E3", cmds, start_enabled=False, enable_secret="en-secret")
     stack = TelnetSwitch(cli, "netops", "sw-pass")
     dell = TelnetSwitch(MockCLI("B218-5548P", {}), "netops", "sw-pass", user_prompt="User Name:")
@@ -211,7 +242,12 @@ def end_to_end():
     page = client.get(r.json["url"], **base)
     ok &= check("saved page opens, with VLAN names", page.status_code == 200 and b"DEMO-IDF-E3" in page.data
                 and b"E Building, E3 IDF" in page.data and b"STUDENT-LAB" in page.data)
-    ok &= check("every command was sent", all(c in cli.commands for c in T.COMMANDS.values()), cli.commands)
+    sent = [c for cmd in T.COMMANDS.values() for c in (cmd if isinstance(cmd, tuple) else [cmd])]
+    ok &= check("every command was sent (and the old-IOS fallback used)", all(c in cli.commands for c in sent), cli.commands)
+    ok &= check("port configs on the page, the rest of the config isn't",
+                b"spanning-tree bpduguard enable" in page.data and b"GigabitEthernet1/0/5" in page.data
+                and b"FAKE-SECRET-HASH" not in page.data and b"FAKE-COMMUNITY" not in page.data
+                and b"hostname DEMO" not in page.data)
     r2 = client.post("/api/topology", json={"address": addr, "months": 6, **login}, **base)
     ok &= check("second run remembers the first", b"run 2," in client.get(r2.json["url"], **base).data)
     pages = client.get("/api/topology/pages", **base).json["pages"]
@@ -232,7 +268,8 @@ def end_to_end():
     ok &= check("demo page loads", client.get("/topology/demo", **base).status_code == 200)
     saved = "".join(p.read_text(encoding="utf-8", errors="ignore")
                     for p in Path(webapp.DATA_DIR).rglob("*") if p.is_file())
-    ok &= check("no password written to disk", not any(pw in saved for pw in ("sw-pass", "en-secret")))
+    ok &= check("no password written to disk",
+                not any(pw in saved for pw in ("sw-pass", "en-secret", "FAKE-SECRET-HASH", "FAKE-COMMUNITY")))
     stack.stop()
     dell.stop()
     return ok
