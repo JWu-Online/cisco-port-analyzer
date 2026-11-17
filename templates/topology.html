@@ -284,8 +284,11 @@
   .flag { display: inline-block; width: 0; height: 0; flex: none; border-left: 5px solid transparent;
           border-right: 5px solid transparent; border-bottom: 9px solid #F5B942; }
   .flag.bad { border-bottom-color: #FF7A6B; }
-  .chip .flag, .key-row .flag { border-bottom-color: var(--check); }
-  .chip .flag.bad, .key-row .flag.bad { border-bottom-color: var(--danger); }
+  .chip .flag, .key-row .flag, .btn .flag { border-bottom-color: var(--check); }
+  .chip .flag.bad, .key-row .flag.bad, .btn .flag.bad { border-bottom-color: var(--danger); }
+  /* Off by default: many ports have small problems, and the triangles get busy */
+  #root:not(.show-issues) .plabel .flag, #root:not(.show-issues) .issue-key { display: none; }
+  .btn .flag { margin-right: 6px; vertical-align: 1px; }
   .issue { border-left: 3px solid var(--check); background: var(--warn-bg); border-radius: 4px; padding: 7px 10px;
            margin: 0 0 8px; font-size: 0.86rem; }
   .issue.bad { border-left-color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, var(--surface)); }
@@ -455,6 +458,8 @@
       <button type="button" data-color="activity" aria-pressed="true">Use</button>
       <button type="button" data-color="vlan" aria-pressed="false">VLAN</button>
     </div>
+    <button type="button" class="btn" id="issues-toggle" aria-pressed="false" hidden
+            title="Mark ports with power or slow-connection problems"><span class="flag bad"></span>Show issues</button>
     <input class="search" id="q" type="search" placeholder="Port, VLAN or description" aria-label="Search ports">
     <span class="spacer"></span>
     <span class="shown" id="shown"></span>
@@ -643,7 +648,7 @@
   "use strict";
   var D = JSON.parse(document.getElementById("topo-data").textContent);
   var root = document.getElementById("root");
-  var state = { view: "plate", color: "activity", q: "", filter: null, sort: { key: "port", dir: 1 } };
+  var state = { view: "plate", color: "activity", q: "", filter: null, sort: { key: "port", dir: 1 }, issues: false };
   var LABEL = { active: "Active", inactive: "Inactive", unsure: "Unsure" };
   var UNIT = D.unit || "Switch";           // "Slot" on a chassis like a 4507
   function unitName(m) { return UNIT + " " + m.number; }
@@ -850,7 +855,7 @@
         { type: "vlan", value: "__other" }));
       lg.appendChild(el("span", "legend-note", "Solid = active · outline = inactive · striped = unsure"));
     }
-    if (ISSUES.ports) {
+    if (ISSUES.ports && state.issues) {
       var parts = [];
       if (ISSUES.power) parts.push(ISSUES.power + " power");
       if (ISSUES.slow) parts.push(ISSUES.slow + " slow connection");
@@ -954,7 +959,7 @@
     var speed = [p.speed, p.duplex].filter(function (s) { return s && s !== "auto"; }).join(" / ");
     if (speed) row("Speed", speed, true);
     (p.notes || []).forEach(function (n) { if (/^Powering /.test(n)) row("Power", n.replace(/^Powering /, ""), true); });
-    issuesOf(p).forEach(function (i, n) {
+    if (state.issues) issuesOf(p).forEach(function (i, n) {
       dl.appendChild(el("dt", null, n ? "" : issuesOf(p).length > 1 ? "Issues" : "Issue"));
       dl.appendChild(el("dd", "tip-issue", "\u25B2 " + i.title));
     });
@@ -1819,6 +1824,19 @@
   window.addEventListener("beforeprint", buildPrintList);   // Ctrl+P gets the same sheet
 
   if (!ISSUES.ports) document.querySelector(".issue-key").hidden = true;
+  var issuesBtn = document.getElementById("issues-toggle");
+  issuesBtn.hidden = !ISSUES.ports;
+  issuesBtn.title = "Mark the " + ISSUES.ports + " port" + (ISSUES.ports === 1 ? "" : "s") +
+    " with power or slow-connection problems";
+  issuesBtn.addEventListener("click", function () {
+    state.issues = !state.issues;
+    root.classList.toggle("show-issues", state.issues);
+    issuesBtn.setAttribute("aria-pressed", String(state.issues));
+    issuesBtn.classList.toggle("on", state.issues);
+    issuesBtn.lastChild.textContent = state.issues ? "Hide issues" : "Show issues";
+    if (!state.issues && state.filter && state.filter.type === "issues") state.filter = null;
+    renderLegend(); applyFilter();
+  });
   if (hasStackInfo) stackEl.classList.add("has-gutter");
   else Array.prototype.forEach.call(document.querySelectorAll(".cable-only"), function (e) { e.hidden = true; });
   renderMembers();
