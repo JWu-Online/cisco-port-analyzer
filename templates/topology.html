@@ -224,6 +224,44 @@
   .btn-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .copied { color: var(--found); font-size: 0.85rem; font-weight: 600; }
   .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* ---------- Move list: plan many port moves to a new switch ---------- */
+  .btn.on { box-shadow: inset 0 -2px 0 var(--action); border-color: var(--action); }
+  body.move-mode .port:not(.absent) { cursor: copy; }
+  body.move-mode .port.moving { outline: 2px solid #5EA8FF !important; outline-offset: 1px; z-index: 2; }
+  body.move-mode .port.moving::before { content: ""; position: absolute; top: 0; right: 0; width: 0; height: 0;
+    border-style: solid; border-width: 0 9px 9px 0; border-color: transparent #fff transparent transparent; }
+  .dock { position: fixed; left: 0; right: 0; bottom: 0; height: 48vh; min-height: 300px; z-index: 15;
+          background: var(--surface); border-top: 1px solid var(--line); box-shadow: 0 -10px 30px rgba(0,0,0,.15);
+          display: flex; flex-direction: column; }
+  body.dock-open main { padding-bottom: calc(48vh + 30px); }
+  .dock-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 20px; border-bottom: 1px solid var(--line-soft); }
+  .dock-head h2 { font-size: 1.05rem; margin: 0; }
+  .dock-head h2 span { font-weight: 400; color: var(--ink-3); font-size: 0.9rem; margin-left: 4px; }
+  .dock select, .dock input:not([type="checkbox"]) { font: inherit; font-size: 0.88rem; padding: 5px 8px; border: 1px solid var(--line);
+                  border-radius: 6px; background: var(--surface); color: var(--ink); }
+  .dock .check { margin: 0; align-items: center; }
+  .dock-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 380px; }
+  .mv-list { overflow: auto; border-right: 1px solid var(--line-soft); }
+  .mv-table { border-collapse: collapse; width: 100%; font-size: 0.86rem; }
+  .mv-table th { position: sticky; top: 0; z-index: 1; background: var(--sunken); text-align: left; padding: 6px 10px;
+                 color: var(--ink-2); font-weight: 600; font-size: 0.8rem; }
+  .mv-table td { padding: 4px 10px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
+  .mv-table td.d { white-space: normal; color: var(--ink-2); min-width: 150px; }
+  .mv-table td.arrow { color: var(--ink-3); padding: 4px 0; }
+  .mv-table .dock-port { font-family: var(--mono); width: 170px; padding: 3px 7px; }
+  .mv-table .dock-port.edited { border-color: var(--action); box-shadow: inset 0 0 0 1px var(--action); }
+  .mv-table .dock-port.bad { border-color: var(--danger); box-shadow: inset 0 0 0 1px var(--danger); }
+  .mv-table .rm { border: 0; background: none; color: var(--ink-3); cursor: pointer; font-size: 1.15rem; line-height: 1; padding: 2px 6px; border-radius: 4px; }
+  .mv-table .rm:hover { background: var(--sunken); color: var(--danger); }
+  .tag { font-size: 0.7rem; font-weight: 600; border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; color: var(--ink-2); margin-left: 6px; }
+  .mv-empty { color: var(--ink-3); padding: 16px 20px; margin: 0; }
+  .mv-side { overflow: auto; padding: 12px 20px 16px; display: flex; flex-direction: column; gap: 9px; }
+  .mv-side .lbl { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 0.88rem; }
+  .mv-side #mv-start { font-family: var(--mono); width: 170px; }
+  .mv-notes p { margin: 0 0 6px; }
+  .mv-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  @media (max-width: 900px) { .dock-body { grid-template-columns: 1fr; } .mv-list { border-right: 0; } }
   .copied.bad { color: var(--danger); }
   .muted { color: var(--ink-2); font-size: 0.86rem; }
   .warn-line { background: var(--warn-bg); border-left: 3px solid var(--check); padding: 6px 10px; border-radius: 4px; font-size: 0.85rem; margin: 0 0 8px; }
@@ -251,7 +289,26 @@
     main { max-width: none; padding: 0; }
     .print-only { display: block !important; }
     span.print-only { display: inline !important; }
-    .drawer, .pick-banner, .drawer-head .sub { display: none !important; }
+    .drawer, .pick-banner, .drawer-head .sub, .dock { display: none !important; }
+    body.dock-open main { padding-bottom: 0 !important; }
+    .port.moving { outline: none !important; }
+    .port.moving::before { display: none !important; }
+    /* the move sheet prints on its own */
+    body.print-moves main { display: none !important; }
+    body:not(.print-moves) #move-print { display: none !important; }
+    #move-print .mv-title { font-size: 18px; font-weight: 700; margin: 0 0 2px; color: #000; }
+    #move-print p { margin: 0 0 8px; color: #000; }
+    .mvp { border-collapse: collapse; width: 100%; font-size: 11px; }
+    .mvp th, .mvp td { border: 1px solid #000; padding: 4px 6px; text-align: left; color: #000; background: #fff; white-space: nowrap;
+                       position: static; }
+    .mvp tr { break-inside: avoid; page-break-inside: avoid; height: 26px; }
+    .mvp td.big { font-family: var(--mono); font-size: 14px; font-weight: 700; }
+    .mvp td.arrow { font-size: 15px; font-weight: 700; text-align: center; border-left: 0; border-right: 0; padding: 0 2px; }
+    .mvp td.desc { white-space: normal; }
+    .mvp td.vlan b { font-size: 12px; }
+    .mvp td.vlan span { font-size: 10px; margin-left: 5px; }
+    .mvp .tick { display: inline-block; width: 12px; height: 12px; border: 1.2px solid #000; }
+    .mvp .notes { width: 22%; }
     body.drawer-open main { margin-right: 0 !important; }
     .port.selected, .port.target { outline: none !important; }
     h1, .sub, .totals, .notice, .controls, .print-opts, .legend, .key-row, details.how, .foot, .back,
@@ -362,6 +419,7 @@
     <span class="spacer"></span>
     <span class="shown" id="shown"></span>
     <button type="button" class="btn" id="csv">Download CSV</button>
+    <button type="button" class="btn" id="move-btn" title="Plan moving many ports to a new switch">Move list</button>
     <button type="button" class="btn" id="print" title="Black-and-white sheet to print or save as a PDF">Print / Save PDF</button>
   </div>
   <div class="print-opts" id="print-opts" hidden>
@@ -414,6 +472,7 @@
       <span>Lights: <span class="led led-up"></span> link up now <span class="led led-err"></span> err-disabled <span class="led"></span> no link</span>
       <span>Diagonal line = shut down</span>
       <span><strong>Click a port</strong> to see and copy its config</span>
+      <span><strong>Move list</strong> plans many moves to a new switch</span>
     </div>
   </div>
   <div id="table-view" hidden>
@@ -439,6 +498,49 @@
   </details>
   <p class="foot">Port Analyzer · Stack topology</p>
 </main>
+
+<section class="dock" id="dock" hidden aria-labelledby="dock-title">
+  <div class="dock-head">
+    <h2 id="dock-title">Move list<span id="mv-count"></span></h2>
+    <span class="muted">Click ports above to add or remove them.</span>
+    <span class="spacer"></span>
+    <select id="mv-add" aria-label="Add active ports"></select>
+    <label class="check"><input type="checkbox" id="mv-unsure"> include Unsure</label>
+    <button type="button" class="btn" id="mv-sort-port">Sort by old port</button>
+    <button type="button" class="btn" id="mv-sort-vlan">Group by VLAN</button>
+    <button type="button" class="link" id="mv-empty-list">Clear list</button>
+    <button type="button" class="btn primary" id="mv-done">Done</button>
+  </div>
+  <div class="dock-body">
+    <div class="mv-list">
+      <table class="mv-table">
+        <thead><tr><th>#</th><th>Old port</th><th>VLAN</th><th>Description</th><th></th><th>New port</th><th></th></tr></thead>
+        <tbody id="mv-rows"></tbody>
+      </table>
+      <p class="mv-empty" id="mv-empty">Nothing yet. Click ports on the front panels, or use “Add active ports from…”.</p>
+    </div>
+    <div class="mv-side">
+      <label class="lbl">New ports start at <input id="mv-start" value="Gi1/0/1" spellcheck="false" autocomplete="off"></label>
+      <label class="lbl">Ports per new switch
+        <select id="mv-per"><option>48</option><option>24</option><option>16</option><option>12</option><option>8</option></select></label>
+      <label class="check"><input type="checkbox" id="mv-wrap" checked>
+        <span>Add <span class="mono">configure terminal</span> and <span class="mono">end</span></span></label>
+      <label class="check"><input type="checkbox" id="mv-wipe">
+        <span>Wipe each new port first (<span class="mono">default interface</span>)</span></label>
+      <div class="mv-notes" id="mv-notes"></div>
+      <div class="mv-actions">
+        <button type="button" class="btn primary" id="mv-copy">Copy config for the new switch</button>
+        <span class="copied" id="mv-copied"></span>
+      </div>
+      <div class="mv-actions">
+        <button type="button" class="btn" id="mv-txt">Download .txt</button>
+        <button type="button" class="btn" id="mv-csv">Download CSV</button>
+        <button type="button" class="btn" id="mv-print">Print move sheet</button>
+      </div>
+    </div>
+  </div>
+</section>
+<section id="move-print" class="print-only"></section>
 <div id="tip" role="tooltip" hidden></div>
 
 <aside class="drawer" id="drawer" hidden aria-labelledby="d-name">
@@ -757,7 +859,10 @@
     var speed = [p.speed, p.duplex].filter(function (s) { return s && s !== "auto"; }).join(" / ");
     if (speed) row("Speed", speed, true);
     tip.appendChild(dl);
-    tip.appendChild(el("div", "tip-hint", picking ? "Click to paste onto this port" : "Click to see and copy its config"));
+    var mi = moveMode ? moveIndex(p) : -1;
+    tip.appendChild(el("div", "tip-hint", picking ? "Click to paste onto this port"
+      : moveMode ? (mi === -1 ? "Click to add to the move list" : "Move list #" + (mi + 1) + ". Click to remove")
+      : "Click to see and copy its config"));
     tip.hidden = false;
   }
   function placeTip(x, y) {
@@ -965,7 +1070,9 @@
 
   function portClicked(item) {
     tip.hidden = true;
-    if (picking) endPick(item); else openPanel(item);
+    if (picking) endPick(item);
+    else if (moveMode) toggleMove(item);
+    else openPanel(item);
   }
   membersEl.addEventListener("click", function (e) {
     var t = e.target.closest(".port");
@@ -977,7 +1084,7 @@
   });
   document.getElementById("tbody").addEventListener("click", function (e) {
     var tr = e.target.closest("tr");
-    if (tr && tr._item) openPanel(tr._item);
+    if (tr && tr._item) portClicked(tr._item);
   });
   document.getElementById("d-close").addEventListener("click", closePanel);
   document.getElementById("d-pick").addEventListener("click", startPick);
@@ -993,6 +1100,293 @@
     if (e.key !== "Escape") return;
     if (picking) endPick(null); else if (current) closePanel();
   });
+
+  // ---- move list: plan many port moves to a new switch at once ----
+  var dock = document.getElementById("dock");
+  var moves = [];          // [{ item: {m, p}, target: "" (numbered automatically) or the name the user typed }]
+  var moveMode = false;
+  var STORE = "pa.moves." + D.host;      // per stack, so redrawing it (to refresh configs) keeps the list
+  var mvStart = document.getElementById("mv-start"), mvPer = document.getElementById("mv-per");
+  var mvWrap = document.getElementById("mv-wrap"), mvWipe = document.getElementById("mv-wipe");
+  var SHORT = {};
+  Object.keys(LONG).forEach(function (k) { SHORT[LONG[k]] = k; });
+
+  function shortName(full) {
+    var m = /^([A-Za-z-]+)(.*)$/.exec(full || "");
+    return m && SHORT[m[1]] ? SHORT[m[1]] + m[2] : (full || "");
+  }
+  function moveIndex(p) {
+    for (var i = 0; i < moves.length; i++) if (moves[i].item.p === p) return i;
+    return -1;
+  }
+  // "Gi1/0/1" -> {type: "GigabitEthernet", member: 1, slot: 0, port: 1}
+  function parseStart() {
+    var full = longName(mvStart.value);
+    if (!full) return null;
+    var m = /^([A-Za-z-]+)(\d+)\/(\d+)\/(\d+)$/.exec(full);
+    if (m) return { type: m[1], member: +m[2], slot: +m[3], port: +m[4] };
+    m = /^([A-Za-z-]+)(\d+)\/(\d+)$/.exec(full);
+    return m ? { type: m[1], member: null, slot: +m[2], port: +m[3] } : null;
+  }
+  // Row i's new port: count up from the start, rolling onto the next switch after the last port
+  function autoTarget(start, i) {
+    if (!start) return null;
+    var per = +mvPer.value, port = start.port + i, member = start.member;
+    if (member === null) return start.type + start.slot + "/" + port;
+    while (port > per) { port -= per; member += 1; }
+    return start.type + member + "/" + start.slot + "/" + port;
+  }
+  function targets() {
+    var start = parseStart();
+    var out = moves.map(function (mv, i) {
+      if (mv.target) { var n = longName(mv.target); return { name: n, auto: false, bad: !n }; }
+      var a = autoTarget(start, i);
+      return { name: a, auto: true, bad: !a };
+    });
+    var seen = {};
+    out.forEach(function (t) { if (t.name) seen[t.name] = (seen[t.name] || 0) + 1; });
+    out.forEach(function (t) { t.dup = !!t.name && seen[t.name] > 1; });
+    return out;
+  }
+  // The config to copy. Without a config read from the switch, rebuild the basics from what we know.
+  function portLines(p) {
+    if (p.config) return { lines: p.config, basic: false };
+    var lines = [];
+    if (p.desc) lines.push(" description " + p.desc);
+    if (/^\d+$/.test(p.vlan)) lines.push(" switchport mode access", " switchport access vlan " + p.vlan);
+    else lines.push(" ! " + vlanLong(p.vlan) + " port: its config wasn't read, set it up by hand");
+    return { lines: lines, basic: true };
+  }
+  function hasLine(p, re) { return (p.config || []).some(function (l) { return re.test(l); }); }
+
+  function saveMoves() {
+    try {
+      localStorage.setItem(STORE, JSON.stringify({
+        moves: moves.map(function (mv) { return [mv.item.p.name, mv.target]; }),
+        start: mvStart.value, per: mvPer.value, wrap: mvWrap.checked, wipe: mvWipe.checked }));
+    } catch (e) { /* private window or storage off: the list just won't survive a reload */ }
+  }
+  function loadMoves() {
+    try {
+      var saved = JSON.parse(localStorage.getItem(STORE) || "null");
+      if (!saved) return;
+      var byName = {};
+      all.forEach(function (i) { byName[i.p.name] = i; });
+      moves = (saved.moves || []).filter(function (r) { return byName[r[0]]; })
+        .map(function (r) { return { item: byName[r[0]], target: r[1] || "" }; });
+      if (saved.start) mvStart.value = saved.start;
+      if (saved.per) mvPer.value = saved.per;
+      mvWrap.checked = saved.wrap !== false;
+      mvWipe.checked = !!saved.wipe;
+    } catch (e) { moves = []; }
+  }
+
+  function toggleMove(item) {
+    var i = moveIndex(item.p);
+    if (i === -1) moves.push({ item: item, target: "" }); else moves.splice(i, 1);
+    renderMoves();
+  }
+  function addActive(scope) {
+    var unsure = document.getElementById("mv-unsure").checked;
+    all.forEach(function (i) {
+      var wanted = i.p.activity === "active" || (unsure && i.p.activity === "unsure");
+      var inScope = scope === "all" || (scope === "shown" ? matches(i) : String(i.m.number) === scope);
+      if (wanted && inScope && moveIndex(i.p) === -1) moves.push({ item: i, target: "" });
+    });
+    renderMoves();
+  }
+  function sortMoves(byVlan) {
+    function vnum(v) { return isNaN(+v) ? 1e6 : +v; }
+    function order(mv) { return mv.item.m.number * 100 + mv.item.p.num; }
+    moves.sort(function (a, b) {
+      var d = byVlan ? vnum(a.item.p.vlan) - vnum(b.item.p.vlan) : 0;
+      return d || order(a) - order(b);
+    });
+    renderMoves();
+  }
+
+  function renderMoves() {
+    var t = targets(), tb = document.getElementById("mv-rows"), start = parseStart();
+    tb.textContent = "";
+    moves.forEach(function (mv, i) {
+      var p = mv.item.p, tr = el("tr");
+      tr.appendChild(el("td", "num", String(i + 1)));
+      var from = el("td");
+      from.appendChild(el("b", "mono", p.name));
+      if (!p.config) from.appendChild(el("span", "tag", "basic"));
+      tr.appendChild(from);
+      tr.appendChild(el("td", null, vlanName(p.vlan) ? p.vlan + " " + vlanName(p.vlan) : vlanLong(p.vlan).replace("VLAN ", "")));
+      tr.appendChild(el("td", "d", p.desc));
+      tr.appendChild(el("td", "arrow", "→"));
+      var td = el("td"), inp = el("input", "dock-port" + (mv.target ? " edited" : "") + (t[i].bad || t[i].dup ? " bad" : ""));
+      inp.value = mv.target || shortName(t[i].name);
+      inp.placeholder = "Gi1/0/1";
+      inp.spellcheck = false;
+      inp.setAttribute("aria-label", "New port for " + p.name);
+      inp.title = mv.target ? "You typed this. Clear it to go back to automatic numbering." : "Numbered automatically. Type to change it.";
+      inp.addEventListener("change", function () {
+        var v = inp.value.trim(), auto = autoTarget(start, i);
+        mv.target = (!v || (auto && longName(v) === auto)) ? "" : v;
+        renderMoves();
+      });
+      td.appendChild(inp);
+      tr.appendChild(td);
+      var rm = el("button", "rm", "×");
+      rm.type = "button";
+      rm.setAttribute("aria-label", "Remove " + p.name);
+      rm.addEventListener("click", function () { moves.splice(moveIndex(p), 1); renderMoves(); });
+      var tdr = el("td");
+      tdr.appendChild(rm);
+      tr.appendChild(tdr);
+      tb.appendChild(tr);
+    });
+    document.getElementById("mv-empty").hidden = moves.length > 0;
+    document.getElementById("mv-count").textContent = moves.length ? moves.length + " port" + (moves.length === 1 ? "" : "s") : "";
+    document.getElementById("move-btn").textContent = moves.length ? "Move list (" + moves.length + ")" : "Move list";
+    tiles.forEach(function (tile) { tile.classList.toggle("moving", moveIndex(tile._item.p) !== -1); });
+    renderMoveNotes(t, start);
+    saveMoves();
+  }
+
+  function renderMoveNotes(t, start) {
+    var box = document.getElementById("mv-notes");
+    box.textContent = "";
+    function note(text, warn) { box.appendChild(el("p", warn ? "warn-line" : "muted", text)); }
+    function names(list) { return list.map(function (mv) { return mv.item.p.name; }).join(", "); }
+    var badTyped = t.filter(function (x) { return x.bad && !x.auto; }).length;
+    var dups = [];
+    t.forEach(function (x) { if (x.dup && dups.indexOf(x.name) === -1) dups.push(x.name); });
+    if (!start) note("“New ports start at” isn't a port name. Use something like Gi1/0/1.", true);
+    if (badTyped) note(badTyped + " typed new port" + (badTyped === 1 ? " isn't a port name" : "s aren't port names") + " (marked in red).", true);
+    if (dups.length) note("Used twice: " + dups.map(shortName).join(", ") + ". Each new port can only get one cable.", true);
+    if (moves.length && start && !badTyped && !dups.length) {
+      var named = t.map(function (x) { return shortName(x.name); });
+      note(moves.length + " port" + (moves.length === 1 ? "" : "s") + " → " + named[0] + (named.length > 1 ? " … " + named[named.length - 1] : "") + ".");
+    }
+    var basic = moves.filter(function (mv) { return !mv.item.p.config; });
+    if (basic.length) note(basic.length + " port" + (basic.length === 1 ? " has" : "s have") +
+      " no config in this drawing, so only the description and VLAN are copied (marked basic)." +
+      (D.has_config ? "" : " Draw the stack again with the enable password to copy full configs."), true);
+    var shut = moves.filter(function (mv) { return hasLine(mv.item.p, /^\s*shutdown\s*$/); });
+    if (shut.length) note("Shut down, so the copy will be too: " + names(shut) + ".", true);
+    var chan = moves.filter(function (mv) { return hasLine(mv.item.p, /^\s*channel-group\b/); });
+    if (chan.length) note("In a port-channel: " + names(chan) + ". Make sure that channel exists on the new switch.", true);
+    if (moves.length > 40) note("Big list: if the switch drops lines while you paste, paste it in two or three parts.");
+    var blocked = !moves.length || !start || badTyped > 0 || dups.length > 0;
+    ["mv-copy", "mv-txt", "mv-csv", "mv-print"].forEach(function (id) { document.getElementById(id).disabled = blocked; });
+  }
+
+  function buildScript() {
+    var t = targets(), lines = [];
+    if (mvWrap.checked) lines.push("configure terminal");
+    lines.push("! Move list from " + D.hostname + " (" + D.host + "), drawn " + D.generated + ": " + moves.length + " ports");
+    moves.forEach(function (mv, i) {
+      var p = mv.item.p, body = portLines(p);
+      lines.push("!");
+      lines.push("! " + (i + 1) + ". from " + ifName(p) + (body.basic ? " (basic: description and VLAN only)" : ""));
+      if (mvWipe.checked) lines.push("default interface " + t[i].name);
+      lines.push("interface " + t[i].name);
+      lines = lines.concat(body.lines);
+    });
+    lines.push("!");
+    if (mvWrap.checked) lines.push("end");
+    return lines.join("\n");
+  }
+  function csvCell(v) {
+    v = String(v === undefined || v === null ? "" : v);
+    if (/^[=+\-@]/.test(v)) v = "'" + v;
+    return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  }
+  function download(name, text, type) {
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: type }));
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+  function printMoves() {
+    var t = targets(), box = document.getElementById("move-print");
+    box.textContent = "";
+    box.appendChild(el("div", "mv-title", "Move list · " + D.hostname + " → new switch"));
+    box.appendChild(el("p", null, moves.length + " ports from " + D.hostname + " (" + D.host + "), drawn " + D.generated +
+      ". Tick each one when the cable is moved."));
+    var table = el("table", "mvp"), hr = el("tr");
+    [["", "cb"], ["#"], ["From (old port)"], [""], ["To (new port)"], ["VLAN"], ["Description"], ["Notes", "notes"]]
+      .forEach(function (h) { hr.appendChild(el("th", h[1] || null, h[0])); });
+    var thead = el("thead"); thead.appendChild(hr); table.appendChild(thead);
+    var tb = el("tbody");
+    moves.forEach(function (mv, i) {
+      var p = mv.item.p, tr = el("tr");
+      var cb = el("td"); cb.appendChild(el("span", "tick")); tr.appendChild(cb);
+      tr.appendChild(el("td", null, String(i + 1)));
+      tr.appendChild(el("td", "big", p.name));
+      tr.appendChild(el("td", "arrow", "→"));
+      tr.appendChild(el("td", "big", shortName(t[i].name)));
+      var vt = el("td", "vlan");
+      vt.appendChild(el("b", null, vlanLong(p.vlan).replace("VLAN ", "")));
+      if (vlanName(p.vlan)) vt.appendChild(el("span", null, vlanName(p.vlan)));
+      tr.appendChild(vt);
+      tr.appendChild(el("td", "desc", p.desc));
+      tr.appendChild(el("td", "notes", ""));
+      tb.appendChild(tr);
+    });
+    table.appendChild(tb);
+    box.appendChild(table);
+    document.body.classList.add("print-moves");
+    window.print();
+  }
+  window.addEventListener("afterprint", function () { document.body.classList.remove("print-moves"); });
+
+  function setMoveMode(on) {
+    moveMode = on;
+    dock.hidden = !on;
+    document.body.classList.toggle("move-mode", on);
+    document.body.classList.toggle("dock-open", on);
+    document.getElementById("move-btn").classList.toggle("on", on);
+    if (on) {
+      if (current) closePanel();
+      if (state.view !== "plate") document.querySelector('button[data-view="plate"]').click();
+    }
+    tip.hidden = true;
+    drawCables();
+  }
+
+  function initMoves() {
+    var add = document.getElementById("mv-add");
+    add.appendChild(el("option", null, "Add active ports from…")).value = "";
+    add.appendChild(el("option", null, "the whole stack")).value = "all";
+    D.members.forEach(function (m) { add.appendChild(el("option", null, "Switch " + m.number)).value = String(m.number); });
+    add.appendChild(el("option", null, "ports matching the filter / search")).value = "shown";
+    add.addEventListener("change", function () { if (add.value) addActive(add.value); add.value = ""; });
+    document.getElementById("move-btn").addEventListener("click", function () { setMoveMode(!moveMode); });
+    document.getElementById("mv-done").addEventListener("click", function () { setMoveMode(false); });
+    document.getElementById("mv-empty-list").addEventListener("click", function () {
+      if (moves.length && confirm("Clear all " + moves.length + " ports from the move list?")) { moves = []; renderMoves(); }
+    });
+    document.getElementById("mv-sort-port").addEventListener("click", function () { sortMoves(false); });
+    document.getElementById("mv-sort-vlan").addEventListener("click", function () { sortMoves(true); });
+    [mvStart, mvPer, mvWrap, mvWipe].forEach(function (x) { x.addEventListener("change", renderMoves); });
+    mvStart.addEventListener("input", function () { renderMoveNotes(targets(), parseStart()); });
+    document.getElementById("mv-copy").addEventListener("click", function () {
+      copyText(buildScript(), document.getElementById("mv-copied"), null);
+    });
+    document.getElementById("mv-txt").addEventListener("click", function () {
+      download(D.hostname + "-move-list.txt", buildScript().replace(/\n/g, "\r\n"), "text/plain");
+    });
+    document.getElementById("mv-csv").addEventListener("click", function () {
+      var t = targets();
+      var lines = [["#", "Old switch", "Old port", "Old interface", "New port", "VLAN", "VLAN name", "Description", "Result"].join(",")];
+      moves.forEach(function (mv, i) {
+        var p = mv.item.p;
+        lines.push([i + 1, mv.item.m.number, p.name, ifName(p), shortName(t[i].name), p.vlan, vlanName(p.vlan), p.desc,
+                    LABEL[p.activity]].map(csvCell).join(","));
+      });
+      download(D.hostname + "-move-list.csv", lines.join("\r\n"), "text/csv");
+    });
+    document.getElementById("mv-print").addEventListener("click", printMoves);
+    loadMoves();
+    renderMoves();
+  }
 
   // ---- printing ----
   var printOpts = document.getElementById("print-opts");
@@ -1044,6 +1438,7 @@
   renderMembers();
   renderLegend();
   applyFilter();
+  initMoves();
   drawCables();
   if (window.ResizeObserver) new ResizeObserver(drawCables).observe(stackEl);
   else window.addEventListener("resize", drawCables);
