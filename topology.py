@@ -53,6 +53,8 @@ COMMANDS = {
     "version": "show version",
     "status": "show interfaces status",
     "vlans": "show vlan brief",
+    # Only the interface sections if the switch can filter; older IOS sends the whole config
+    "config": ("show running-config | section ^interface", "show running-config"),
     "link": "show interfaces link",
     "interfaces": "show interfaces",
 }
@@ -243,6 +245,36 @@ def parse_vlan_names(output):
     return names
 
 
+_SECRET_WORDS = re.compile(r"\b(password|secret|key|key-string|authentication-key|message-digest-key|community)\b", re.I)
+
+
+def parse_interface_configs(output):
+    """'show running-config' -> {port: {"ifname", "lines", "removed"}}.
+
+    Only interface sections are kept; the rest of the config (users, SNMP,
+    TACACS keys) is ignored. A port line that carries a key or password (rare on
+    access ports) is swapped for a '!' comment, so saved pages never hold secrets.
+    """
+    configs, current = {}, None
+    for raw in (output or "").splitlines():
+        line = raw.rstrip()
+        if line.startswith("interface "):
+            ifname = line.split(None, 1)[1].strip()
+            current = {"ifname": ifname, "lines": [], "removed": 0}
+            configs[normalize_intf(ifname)] = current
+        elif current is not None and line.startswith(" "):
+            body = line.strip()
+            secret = None if body.startswith("description ") else _SECRET_WORDS.search(body)
+            if secret:
+                current["lines"].append(f" ! left out: a line with a key or password ({body[:secret.end()]} ...)")
+                current["removed"] += 1
+            else:
+                current["lines"].append(line)
+        else:
+            current = None          # "!" or the next section ends the interface
+    return configs
+
+
 def parse_link(output):
     """'show interfaces link' -> {port: down time text}.
 
@@ -393,6 +425,7 @@ def build_stack(outputs, host, months=6, history=None, now=None, where=""):
     status = parse_status(outputs.get("status"))
     link = parse_link(outputs.get("link"))
     vlan_names = parse_vlan_names(outputs.get("vlans"))
+    configs = parse_interface_configs(outputs.get("config"))
     stack_days = version["uptime"].total_seconds() / 86400 if version["uptime"] else None
     intfs = {normalize_intf(p["port"]): p
              for p in analyzer.parse_ios_interfaces(outputs.get("interfaces"), stack_days)}
@@ -478,6 +511,9 @@ def build_stack(outputs, host, months=6, history=None, now=None, where=""):
                 "why": why, "up_now": connected,
                 "admin_down": state == "disabled", "err": state.startswith("err-"),
             })
+            if name in configs:
+                ports_out[-1].update(ifname=configs[name]["ifname"], config=configs[name]["lines"],
+                                     removed=configs[name]["removed"])
 
         if counts["unsure"]:
             warnings.append(
@@ -514,6 +550,7 @@ def build_stack(outputs, host, months=6, history=None, now=None, where=""):
         "months": months, "summary": totals, "warnings": warnings,
         "vlans": _vlan_legend(vlan_counts), "members": members_out,
         "vlan_names": {v: vlan_names[v] for v in sorted(vlan_counts, key=lambda v: (len(v), v)) if v in vlan_names},
+        "has_config": bool(configs),
         "links": _stack_links(neighbors, stack_ports),
         "history_runs": history["runs"], "history_since": history["first_run"][:10],
     }
@@ -560,10 +597,11 @@ def collect_outputs(address, protocol, login, timeout=20, progress=print):
     with sw.connect(address, "cisco_ios", protocol, login, timeout) as conn:
         outputs["prompt"] = sw.prompt_name(conn)
         for key, command in COMMANDS.items():
-            progress(f"  {command}")
+            tries = list(command) if isinstance(command, tuple) else [command]
+            progress(f"  {tries[0]}")
             try:
-                _, outputs[key] = sw.run_first_working(conn, [command],
-                                                       read_timeout=300 if key == "interfaces" else 180)
+                _, outputs[key] = sw.run_first_working(conn, tries,
+                                                       read_timeout=300 if key in ("interfaces", "config") else 180)
             except Exception as exc:                 # one bad command shouldn't stop the rest
                 progress(f"    skipped: {sw.friendly_error(exc)}")
                 outputs[key] = ""

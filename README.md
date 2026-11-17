@@ -87,6 +87,8 @@ Click **Stack topology** at the top of the page to draw one Cisco stack. Every m
 
 Hover over a port for its description, VLAN number and name (from `show vlan brief`), status and why it got its result. Switch to **Table** for a sortable list, or click **Download CSV**.
 
+**Copying a port's config:** click any port (or a row in the Table) to open its panel. It shows the port's config from the switch with a **Copy config** button. Under **Paste onto another port**, type the new port (like `Gi2/0/14`) or click **Pick on the page**, and it rewrites the config for that port, ready to paste into the new switch. You can add `configure terminal` / `end` around it, and `default interface` to wipe the new port first. Reading configs needs privileged access: if the login doesn't land at the `#` prompt, fill in the enable password. Only the port sections are kept; a port line with a key or password is left out and marked with `!`.
+
 **Printing for the field:** click **Print / Save PDF**. It makes a black-and-white, landscape sheet that reads the same on any printer: a **solid black box** is a port in use, an **empty box** is free, a box with a **black corner** is unsure, and a **dashed box** is shut down. The VLAN is printed big in every box, with a key of VLAN names at the top. You can add a checklist of the Inactive and Unsure ports (or all ports) with a box to tick and a Notes column to write in. To get a PDF instead of paper, pick **Save as PDF** as the printer. Every drawing is saved in `data\topology\pages`, and **Earlier drawings** opens them again. To see what it looks like first, click **See a made-up example**.
 
 It decides Active, Inactive and Unsure a bit more carefully than the main check, because a stack can tell it more:
