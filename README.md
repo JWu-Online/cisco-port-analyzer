@@ -98,7 +98,17 @@ Hover over a port for its description, VLAN number and name (from `show vlan bri
 
 It won't let you copy or print while two rows share a new port or a name isn't a real port. Ports without a config in the drawing (no enable access) only get their description and VLAN, and are marked **basic**. The list is kept in your browser for each stack, so it's still there if you reload or redraw the stack. Moving two old stacks onto one new switch? Make the first list, then on the second stack start where the first ended (like `Gi1/0/31`).
 
-**Printing for the field:** click **Print / Save PDF**. It makes a black-and-white, landscape sheet that reads the same on any printer: a **solid black box** is a port in use, an **empty box** is free, a box with a **black corner** is unsure, and a **dashed box** is shut down. The VLAN is printed big in every box, with a key of VLAN names at the top. You can add a checklist of the Inactive and Unsure ports (or all ports) with a box to tick and a Notes column to write in. To get a PDF instead of paper, pick **Save as PDF** as the printer. Every drawing is saved in `data\topology\pages`, and **Earlier drawings** opens them again. To see what it looks like first, click **See a made-up example**.
+**Problem ports (power and slow connections):** each drawing also reads `show power inline` and the error counters, and puts a **triangle** next to the port number of any port with a problem (red = act on it, amber = worth a look). Click the **Issues** chip above the panels to show only those ports, or sort the Table by **Issues**. It flags:
+- **Power:** PoE fault (often a damaged cable or jack, or a bad device), power denied (the switch is out of PoE budget), PoE shut off. A switch with less than 10% of its PoE power left gets a warning at the top, and every member shows how much it's using. The port panel says what each port powers (like `IP Phone 8845 · 5.9 W`).
+- **Slow connection:** lots of damaged (CRC) packets received, late collisions (a duplex mismatch), lots of output drops, half duplex, or a link stuck at 10 Mb. A gigabit port linked at only 100 Mb is mentioned in its panel but not flagged, since old phones and printers do that normally. Small error counts are ignored: it takes at least 100 errors and 0.01% of traffic. Dell drawings don't include error counters, so on a Dell only power, duplex and speed are checked.
+
+**Cable test:** in a port's panel, **Run cable test** runs the switch's own cable test (TDR, `test cable-diagnostics tdr`) on that port and tells you in plain words what it found: cable good and about how long, or which pair is open, shorted or damaged and how far away. It also reads that port's error counters and power again. Things to know:
+- It **interrupts the port**: the link drops for about 6 seconds (about a minute on a 4500 line card) and PoE is cut, so a phone or access point restarts. The panel says who is plugged in, and makes you tick a box first.
+- It only works on copper gigabit ports. Fiber and most 10G ports can't be tested, and some switches won't test a shut-down port. When the switch refuses, you see what it said.
+- "All pairs open" at the same distance on a port with no link usually just means nothing is plugged in at the far end; the distance is how long the run is.
+- It needs your password again (it isn't saved anywhere), and only works when the drawing is opened from the app, not from a saved file. On the made-up example it shows a made-up result.
+
+**Printing for the field:** click **Print / Save PDF**. It makes a black-and-white, landscape sheet that reads the same on any printer: a **solid black box** is a port in use, an **empty box** is free, a box with a **black corner** is unsure, and a **dashed box** is shut down. The VLAN is printed big in every box, with a key of VLAN names at the top. You can add a checklist of the Inactive and Unsure ports (or all ports, or the ports with issues) with a box to tick and a Notes column to write in. To get a PDF instead of paper, pick **Save as PDF** as the printer. Every drawing is saved in `data\topology\pages`, and **Earlier drawings** opens them again. To see what it looks like first, click **See a made-up example**.
 
 It decides Active, Inactive and Unsure a bit more carefully than the main check, because a stack can tell it more:
 - **Active** if the link is up now, or went down in the months you picked (`show interfaces link`), or Last input/output is recent, or an earlier drawing saw it up.
@@ -174,7 +184,7 @@ app.py              web app (Flask, served by waitress on 127.0.0.1 only)
 analyzer.py         reading each switch type's ports, deciding Inactive/Unsure/Active, the command line
 switches.py         logging in over SSH/telnet for each switch type
 report.py           the Excel report
-topology.py         Stack topology: reading a Cisco or Dell stack, deciding each port, Cisco/Dell config translation, the saved page
+topology.py         Stack topology: reading a Cisco or Dell stack, deciding each port, PoE and error checks, the cable test, Cisco/Dell config translation, the saved page
 topology_demo.py    made-up Cisco and Dell stacks for the example pages and the tests
 templates/, static/ the pages
 examples/           a made-up switch list

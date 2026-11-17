@@ -77,6 +77,11 @@ def _ports():
             yield num, port, vlan, kind, _desc(rng, vlan if vlan != "trunk" else "60", num, port), boot_token
 
 
+# Made-up problems, so the health checks have something to show (Cisco demo)
+HEALTH = {(1, 5): "crc", (1, 17): "late", (1, 30): "drops", (2, 9): "half", (2, 22): "ten",
+          (1, 11): "hundred", (2, 31): "poe-fault", (1, 40): "poe-deny"}
+
+
 def _status_line(name, desc, status, vlan, duplex, speed, ptype):
     return f"{name:<13}{desc[:18]:<19}{status:<13}{vlan:<11}{duplex:>6} {speed:>6} {ptype}"
 
@@ -90,8 +95,21 @@ def demo_outputs():
     old_tokens = ["38w2d", "44w6d", "52w1d"]
 
     run = []          # 'show running-config | section ^interface'
+    power = ["Module   Available     Used     Remaining", "          (Watts)     (Watts)    (Watts)",
+             "------   ---------   --------   ---------",
+             "1           435.0      410.8        24.2", "2           435.0      122.4       312.6",
+             "3           435.0       38.9       396.1",
+             "Interface Admin  Oper       Power   Device              Class Max", "                            (Watts)",
+             "--------- ------ ---------- ------- ------------------- ----- ----"]
 
     for num, port, vlan, kind, desc, boot_token in _ports():
+        problem = HEALTH.get((num, port))
+        if problem == "poe-deny":
+            vlan, desc = "60", "AP E-3 hallway"
+        if problem in ("crc", "late", "drops", "half", "ten", "hundred"):
+            kind = "up"
+        elif problem:
+            kind = "recent"
         short = f"Gi{num}/0/{port}"
         long_ = f"GigabitEthernet{num}/0/{port}"
         if kind == "up":
@@ -112,8 +130,25 @@ def demo_outputs():
             st, down, li, lo = "notconnect", boot_token, "never", "never"
 
         up = st == "connected"
-        status.append(_status_line(short, desc, st, vlan, "a-full" if up else "auto",
-                                   "a-1000" if up else "auto", "10/100/1000BaseTX"))
+        duplex = ("a-half" if problem == "half" else "a-full") if up else "auto"
+        speed = {"half": "a-100", "ten": "a-10", "hundred": "a-100"}.get(problem, "a-1000") if up else "auto"
+        status.append(_status_line(short, desc, st, vlan, duplex, speed, "10/100/1000BaseTX"))
+        # 'show power inline': phones and access points draw power; two ports have power problems
+        if problem == "poe-fault":
+            power.append(f"{short:<10}auto   faulty     0.0     n/a                 n/a   30.0")
+        elif problem == "poe-deny":
+            power.append(f"{short:<10}auto   power-deny 0.0     Ieee PD             4     30.0")
+        elif up and vlan in ("20", "21"):
+            power.append(f"{short:<10}auto   on         5.9     IP Phone 8845       2     30.0")
+        elif up and vlan in ("60", "trunk"):
+            power.append(f"{short:<10}auto   on         15.4    AIR-AP2802I-B-K9    4     30.0")
+        else:
+            power.append(f"{short:<10}auto   off        0.0     n/a                 n/a   30.0")
+        packets_in = (port * 7919 + num * 104729) * 13 if up or kind in ("recent", "old") else 0
+        packets_out = packets_in * 2
+        crc = packets_in // 250 if problem == "crc" else (3 if packets_in else 0)
+        late = 233 if problem == "late" else 0
+        drops = packets_out // 40 if problem == "drops" else 0
         link.append(f"{short:<15}{desc[:18]:<19}{down:<15}{'12w3d' if up else ''}")
         head = {
             "connected": "is up, line protocol is up (connected)",
@@ -141,6 +176,12 @@ def demo_outputs():
             "  MTU 1500 bytes, BW 1000000 Kbit/sec, DLY 10 usec, ",
             f"  Last input {li}, output {lo}, output hang never",
             '  Last clearing of "show interface" counters never',
+            f"  Input queue: 0/2000/0/0 (size/max/drops/flushes); Total output drops: {drops}",
+            f"     {packets_in} packets input, {packets_in * 480} bytes, 0 no buffer",
+            f"     {crc} input errors, {crc} CRC, 0 frame, 0 overrun, 0 ignored",
+            f"     {packets_out} packets output, {packets_out * 420} bytes, 0 underruns",
+            "     0 output errors, 0 collisions, 1 interface resets",
+            f"     {late} late collision, 0 deferred",
         ]
 
     # Ports the tool must ignore: uplink module, app-hosting port, SVIs.
@@ -247,6 +288,7 @@ def demo_outputs():
         "version": version,
         "status": "\n".join(status),
         "vlans": vlans,
+        "power": "\n".join(power),
         "config": "\n".join(run + [
             "interface TenGigabitEthernet1/1/1", " description UPLINK-CORE", " switchport mode trunk", "!",
             "interface Vlan99", " ip address 10.99.4.11 255.255.255.0", "!"]),
@@ -296,6 +338,12 @@ def dell_demo_outputs():
         if v != "1":
             run += [f"interface vlan {v}", f"name {n}", "exit"]
     untagged, tagged = {}, {}
+    poe = ["", "Unit  Power  Nominal Power  Consumed Power  Usage Threshold  Traps",
+           "----  -----  -------------  --------------  ---------------  -------",
+           "1     On     370 Watts      46 Watts (12%)  95               Disable",
+           "2     On     370 Watts      21 Watts (5%)   95               Disable", "",
+           "Port       Powered Device   State   Status     Priority  Class",
+           "---------  ---------------  ------  ---------  --------  -------"]
 
     for unit, _, count in DELL_UNITS:
         for port in list(range(1, count + 1)) + ["te1", "te2"]:
@@ -306,10 +354,20 @@ def dell_demo_outputs():
                                              "shut" if roll < 0.73 else "never")
             vlan = "trunk" if uplink or (rng.random() < 0.06) else rng.choice(
                 ["20"] * 5 + ["30"] * 4 + ["50", "60", "99", "1", "1"])
+            if (unit, port) == (2, 7):
+                kind = "used"                       # PoE fault, link down
             up = kind in ("up", "uplink")
-            speed = "10000" if uplink else "1000"
+            speed = "10000" if uplink else ("100" if (unit, port) in ((1, 9), (1, 14)) else "1000")
+            half = (unit, port) == (1, 14)
             ptype = "10G-Fiber" if uplink else "1G-Copper"
-            status.append(f"{name:<8} {ptype:<12} {'Full' if up else '  --':<6}  {speed if up else '  --':<5} "
+            if not uplink:
+                if (unit, port) == (2, 7):
+                    poe.append(f"{name:<10} {'':<16} Auto    Fault      low       class0")
+                elif up and vlan == "20":
+                    poe.append(f"{name:<10} {'Phone':<16} Auto    On         low       class2")
+                else:
+                    poe.append(f"{name:<10} {'':<16} Auto    Searching  low       class0")
+            status.append(f"{name:<8} {ptype:<12} {('Half' if half else 'Full') if up else '  --':<6}  {speed if up else '  --':<5} "
                           f"{'Enabled ' if up else '   --   '} {'Off' if up else ' --'}  {'Up' if up else 'Down':<11} "
                           f"{'Disabled' if up else '   --   '} {'On' if up else '--'}")
             label = "" if rng.random() < 0.15 else (
@@ -375,4 +433,5 @@ def dell_demo_outputs():
         "prompt": "DEMO-B2-DELL#", "system": system, "stack": stack,
         "status": "\n".join(status), "description": "\n".join(desc),
         "counters": "\n".join(cin + [""] + cout), "vlans": "\n".join(vlan), "config": "\n".join(run),
+        "power": "\n".join(poe),
     }

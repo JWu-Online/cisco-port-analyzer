@@ -35,6 +35,7 @@ import json
 import os
 import re
 import sys
+import time
 import webbrowser
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -64,6 +65,7 @@ COMMANDS = {
     "config": ("show running-config | section ^interface", "show running-config"),
     "link": "show interfaces link",
     "modules": "show module",
+    "power": "show power inline",
     "interfaces": "show interfaces",
 }
 DELL_COMMANDS = {
@@ -73,6 +75,7 @@ DELL_COMMANDS = {
     "description": "show interfaces description",
     "counters": "show interfaces counters",
     "vlans": "show vlan",
+    "power": "show power inline",
     "config": "show running-config",
 }
 VENDORS = {"cisco_ios": "Cisco Catalyst", "dell_powerconnect": "Dell PowerConnect"}
@@ -686,9 +689,14 @@ def build_stack(outputs, host, months=6, history=None, now=None, where="", vendo
     if not chosen:
         raise ValueError(no_ports_message(set(status) | set(intfs)))
     modules, chassis_model = parse_modules(outputs.get("modules")) if chassis else ({}, "")
+    power_ports, budgets = parse_power_inline(outputs.get("power"))
+    errors = parse_ios_errors(outputs.get("interfaces"))
+    issue_count = {"ports": 0, "power": 0, "slow": 0}
     member_numbers = sorted(set(chosen) | (set() if chassis else set(switch_rows)))
     if not switch_rows and not chassis and len(member_numbers) == 1:
         warnings.append("'show switch' returned nothing, so this is drawn as a single switch.")
+    if 0 in budgets and not chassis and len(member_numbers) == 1:
+        budgets[member_numbers[0]] = budgets.pop(0)       # a lone switch prints one 'Available:' line, no table
     port_history = _touch_history(history, now)
 
     members_out = []
@@ -734,12 +742,16 @@ def build_stack(outputs, host, months=6, history=None, now=None, where="", vendo
                 "num": port, "name": name,
                 "desc": it.get("description") or st.get("desc", ""),
                 "status": state, "vlan": vlan,
-                "speed": st.get("speed", ""), "duplex": st.get("duplex", ""),
+                "speed": st.get("speed", ""), "duplex": st.get("duplex", ""), "ptype": st.get("type", ""),
                 "activity": activity,
                 "last_active": last_active.strftime("%Y-%m-%d") if last_active else "",
                 "why": why, "up_now": connected,
                 "admin_down": state == "disabled", "err": state.startswith("err-"),
             })
+            budget = budgets.get(0) if chassis else budgets.get(num)
+            _add_health(ports_out[-1], port_health(name, connected, st.get("speed", ""), st.get("duplex", ""),
+                                                   st.get("type", ""), errors.get(name), power_ports.get(name),
+                                                   budget, uptime), issue_count)
             cfg = configs.get(name)
             if cfg:
                 ports_out[-1].update(ifname=cfg["ifname"], config=cfg["lines"], removed=cfg["removed"])
@@ -755,6 +767,7 @@ def build_stack(outputs, host, months=6, history=None, now=None, where="", vendo
         members_out.append({
             "number": num,
             "card": modules.get(num, {}).get("card", ""),
+            "poe": None if chassis else budgets.get(num),
             "role": "" if chassis else row.get("role", "" if switch_rows else "Standalone"),
             "state": row.get("state", ""),
             "model": vinfo.get("model", ""),
@@ -768,6 +781,8 @@ def build_stack(outputs, host, months=6, history=None, now=None, where="", vendo
             totals[k] += counts[k]
         totals["total"] += counts["active"] + counts["inactive"] + counts["unsure"]
 
+    _budget_warnings({0: budgets[0]} if chassis and 0 in budgets else
+                     {n: b for n, b in budgets.items() if n in member_numbers}, "Slot" if chassis else "Switch", warnings)
     down = [f"Switch {m} port {i + 1}" for m, pair in sorted(stack_ports.items())
             for i, st in enumerate(pair) if st.upper() != "OK"]
     if down and len(member_numbers) > 1:
@@ -778,7 +793,7 @@ def build_stack(outputs, host, months=6, history=None, now=None, where="", vendo
     data = {
         "host": host, "where": where, "vendor": "cisco_ios", "vendor_name": VENDORS["cisco_ios"],
         "unit": "Slot" if chassis else "Switch", "units": "slots" if chassis else "members",
-        "model": chassis_model,
+        "model": chassis_model, "poe": budgets.get(0) if chassis else None, "issues": issue_count,
         "hostname": version["hostname"] or outputs.get("prompt", "") or host,
         "generated": now.strftime("%Y-%m-%d %H:%M"),
         "months": months, "summary": totals, "warnings": warnings,
@@ -946,6 +961,13 @@ def build_dell_stack(outputs, host, months=6, history=None, now=None, where=""):
     configs = parse_interface_configs(outputs.get("config"))
     voice = re.search(r"(?im)^\s*voice vlan id (\d+)", outputs.get("config") or "")
     voice_id = voice.group(1) if voice else ""
+    power_ports, budgets = parse_power_inline(outputs.get("power"), "dell_powerconnect")
+    link_info = {}                       # port: (type, duplex, speed) from 'show interfaces status'
+    for line in (outputs.get("status") or "").splitlines():
+        words = line.split()
+        if len(words) >= 4 and analyzer.DELL_PORT.match(line):
+            link_info[normalize_intf(words[0])] = (words[1], words[2], words[3])
+    issue_count = {"ports": 0, "power": 0, "slow": 0}
 
     if not ports_by:
         raise ValueError("Read the switch, but no ports could be read. Is it a Dell PowerConnect 5500?")
@@ -1018,14 +1040,19 @@ def build_dell_stack(outputs, host, months=6, history=None, now=None, where=""):
             vlan_counts[vlan] = vlan_counts.get(vlan, 0) + 1
             counts[activity] += 1
             counts["up_now"] += int(connected)
+            ptype, duplex, speed = link_info.get(name, ("", "", ""))
             ports_out.append({
                 "num": port, "name": b["port"], "desc": b.get("description", ""),
-                "status": state, "vlan": vlan, "speed": "", "duplex": "",
+                "status": state, "vlan": vlan, "ptype": ptype,
+                "speed": speed if connected else "", "duplex": duplex if connected else "",
                 "activity": activity,
                 "last_active": last_active.strftime("%Y-%m-%d") if last_active else "",
                 "why": why, "up_now": connected,
                 "admin_down": state == "disabled", "err": False,
             })
+            _add_health(ports_out[-1], port_health(name, connected, speed if connected else "", duplex if connected else "",
+                                                   ptype, None, power_ports.get(name), budgets.get(num), uptime,
+                                                   "dell_powerconnect"), issue_count)
             if cfg:
                 ports_out[-1].update(ifname=cfg["ifname"], config=cfg["lines"], removed=cfg["removed"])
             prof = prof or basic_profile(ports_out[-1]["desc"], vlan)
@@ -1035,7 +1062,7 @@ def build_dell_stack(outputs, host, months=6, history=None, now=None, where=""):
         members_out.append({
             "number": num,
             "role": roles.get(num, "Standalone" if len(chosen) == 1 else ""),
-            "state": "", "model": model,
+            "state": "", "model": model, "poe": budgets.get(num),
             "uptime": human_span(uptime) if uptime else "",
             "port_count": size, "stack_ports": [], "counts": counts, "ports": ports_out,
         })
@@ -1043,6 +1070,7 @@ def build_dell_stack(outputs, host, months=6, history=None, now=None, where=""):
             summary[k] += counts[k]
         summary["total"] += counts["active"] + counts["inactive"] + counts["unsure"]
 
+    _budget_warnings({n: b for n, b in budgets.items() if n in chosen}, "Switch", warnings)
     if counted:
         warnings.append(f"{counted} port(s) had traffic since the switch started {human_span(uptime) if uptime else ''} "
                         f"ago, but Dell switches don't record when, so they're Unsure. Each drawing remembers the "
@@ -1051,7 +1079,7 @@ def build_dell_stack(outputs, host, months=6, history=None, now=None, where=""):
 
     data = {
         "host": host, "where": where, "vendor": "dell_powerconnect", "vendor_name": VENDORS["dell_powerconnect"],
-        "unit": "Switch", "units": "members", "model": "",
+        "unit": "Switch", "units": "members", "model": "", "poe": None, "issues": issue_count,
         "hostname": system["hostname"] or outputs.get("prompt", "") or host,
         "generated": now.strftime("%Y-%m-%d %H:%M"),
         "months": months, "summary": summary, "warnings": warnings,
@@ -1061,6 +1089,337 @@ def build_dell_stack(outputs, host, months=6, history=None, now=None, where=""):
         "history_runs": history["runs"], "history_since": history["first_run"][:10],
     }
     return data, history
+
+
+# ---------------------------------------------------------------------------
+# Port health: power (PoE) problems and signs of a slow connection
+# ---------------------------------------------------------------------------
+ERRORS_MIN = 100        # a handful of damaged packets since the switch started is normal
+ERRORS_WARN = 0.0001    # 0.01% of received packets damaged: worth a look
+ERRORS_BAD = 0.001      # 0.1%: users will notice
+DROPS_MIN, DROPS_WARN = 1000, 0.01
+POE_LOW = 0.10          # less than 10% of a switch's PoE budget left
+_POE_ADMIN = {"auto", "static", "never", "consumption"}
+
+
+def parse_power_inline(output, vendor="cisco_ios"):
+    """'show power inline' -> (ports, budgets).
+
+    ports:   {port: {"state", "watts", "device", "cls"}}
+    budgets: {member: {"available", "used", "remaining"}} in watts; member 0 = the whole chassis
+    Cisco stacks print a Module table, a 4500 one 'Available: Used: Remaining:' line, a Dell 5548P a Unit table.
+    """
+    ports, budgets = {}, {}
+    text = output or ""
+    m = re.search(r"(?i)Available:\s*([\d.]+)\s*\(w\)\s*Used:\s*([\d.]+)\s*\(w\)\s*Remaining:\s*(-?[\d.]+)", text)
+    if m:
+        budgets[0] = {"available": float(m.group(1)), "used": float(m.group(2)), "remaining": float(m.group(3))}
+    for line in text.splitlines():
+        b = re.match(r"^\s*(\d{1,2})\s+([\d.]+)\s+([\d.]+)\s+(-?[\d.]+)\s*$", line)
+        if b:                                               # Cisco: Module Available Used Remaining
+            budgets[int(b.group(1))] = {"available": float(b.group(2)), "used": float(b.group(3)),
+                                        "remaining": float(b.group(4))}
+            continue
+        d = re.match(r"(?i)^\s*(\d{1,2})\s+(?:on|off)\s+(\d+)\s*watts?\s+(\d+)\s*watts?", line)
+        if d:                                               # Dell: Unit Power Nominal Consumed
+            avail, used = float(d.group(2)), float(d.group(3))
+            budgets[int(d.group(1))] = {"available": avail, "used": used, "remaining": avail - used}
+            continue
+        words = line.split()
+        if len(words) < 3 or not _NAME_RE.match(words[0]):
+            continue
+        low = [w.lower() for w in words]
+        admin = next((i for i in range(1, len(low)) if low[i] in _POE_ADMIN), None)
+        if admin is None or admin + 1 >= len(words):
+            continue
+        state = low[admin + 1]
+        if vendor == "dell_powerconnect":                   # port, powered device, state, status, priority, class
+            device = " ".join(words[1:admin])
+            rest = words[admin + 2:]
+            cls = next((w for w in rest if re.fullmatch(r"(?i)class\d", w)), "")
+            watts = None
+        else:                                               # port, admin, oper, watts..., device, class[, max]
+            rest = words[admin + 2:]
+            nums = []
+            while rest and re.fullmatch(r"\d+(?:\.\d+)?", rest[0]):
+                nums.append(float(rest.pop(0)))
+            if rest and re.fullmatch(r"\d+\.\d+", rest[-1]):
+                rest.pop()                                  # Max watts (stacks print it last)
+            cls = rest.pop() if rest and re.fullmatch(r"(?i)\d|n/a", rest[-1]) else ""
+            device = " ".join(rest)
+            watts = nums[-1] if nums else None              # a 4500 prints "from PS" then "to device"
+        ports[normalize_intf(words[0])] = {"state": state, "watts": watts,
+                                           "device": "" if device.lower() in ("n/a", "") else device,
+                                           "cls": "" if cls.lower() == "n/a" else cls.lower().replace("class", "")}
+    return ports, budgets
+
+
+_ERR_FIELDS = [("in_packets", r"(\d+) packets input"), ("out_packets", r"(\d+) packets output"),
+               ("in_errors", r"(\d+) input errors"), ("crc", r"(\d+) CRC"), ("late", r"(\d+) late collision"),
+               ("drops", r"Total output drops:\s*(\d+)")]
+
+
+def parse_ios_errors(output):
+    """'show interfaces' -> {port: counters} for slow-connection signs, plus when counters were cleared."""
+    ports, cur = {}, None
+    for line in (output or "").splitlines():
+        h = re.match(r"^(\S+) is (?:up|down|administratively down)", line)
+        if h:
+            cur = ports.setdefault(normalize_intf(h.group(1)), {})
+            continue
+        if cur is None:
+            continue
+        for key, rx in _ERR_FIELDS:
+            m = re.search(rx, line)
+            if m:
+                cur[key] = int(m.group(1))
+        m = re.search(r'Last clearing of "show interface" counters (\S+)', line)
+        if m:
+            cur["cleared"] = m.group(1)
+    return ports
+
+
+def _speed_mb(speed):
+    m = re.search(r"(\d+)\s*([GM]?)", speed or "")
+    if not m:
+        return None
+    return int(m.group(1)) * (1000 if m.group(2) == "G" else 1)
+
+
+def _pct(x):
+    return f"{x * 100:.2f}%" if x < 0.01 else f"{x * 100:.1f}%"
+
+
+def port_health(name, connected, speed, duplex, ptype, err, poe, budget, uptime, vendor="cisco_ios"):
+    """Problems worth a look on one port, in plain words: (issues, notes).
+
+    issues: [{"level": "bad" | "warn", "kind": "power" | "slow", "title", "text"}]
+    notes:  plain facts for the port panel (what it powers, its speed)
+    """
+    issues, notes = [], []
+
+    def add(level, kind, title, text):
+        issues.append({"level": level, "kind": kind, "title": title, "text": text})
+
+    # ---- power ----
+    if poe:
+        state, budget_text = poe["state"], ""
+        if budget:
+            budget_text = f" This switch has {budget['remaining']:.0f} W left of {budget['available']:.0f} W."
+        if state in ("faulty", "fault") or "fault" in state or "short" in state or "overload" in state:
+            add("bad", "power", "PoE fault", "The switch saw a problem powering this device and stopped: often a damaged "
+                "cable or wall jack, a short, or a faulty device. Try the cable test.")
+        elif "deny" in state or "denied" in state:
+            add("bad", "power", "PoE denied", "The switch refused to power this device because it doesn't have enough "
+                "PoE power left." + budget_text)
+        elif "err" in state:
+            add("bad", "power", "PoE shut off", "The switch shut this port's power off after a power problem, such as "
+                "the device drawing more than allowed.")
+        elif state == "on":
+            what = poe["device"] or "a device"
+            bits = [f"{poe['watts']:g} W" if poe.get("watts") is not None else "", f"class {poe['cls']}" if poe.get("cls") else ""]
+            notes.append("Powering " + what + "".join(" · " + b for b in bits if b))
+
+    # ---- slow connection ----
+    if err:
+        if err.get("cleared", "never") == "never":
+            since = f"since the switch started {human_span(uptime)} ago" if uptime else "since the switch started"
+        else:
+            ago, _ = parse_cisco_duration(err["cleared"])
+            since = f"in the {human_span(ago)} since the counters were cleared" if ago else "since the counters were cleared"
+        received = err.get("in_packets", 0)
+        damaged = max(err.get("crc", 0), err.get("in_errors", 0))
+        if damaged >= ERRORS_MIN and received and damaged / received >= ERRORS_WARN:
+            rate = damaged / received
+            add("bad" if rate >= ERRORS_BAD else "warn", "slow", "Receive errors",
+                f"{damaged:,} damaged packets received ({_pct(rate)} of traffic) {since}. Usually a damaged cable, "
+                f"a bad patch cord or wall jack, or a failing device. Try the cable test.")
+        if err.get("late", 0) > 0:
+            add("bad", "slow", "Late collisions",
+                f"{err['late']:,} late collisions {since}: almost always a duplex mismatch, one end set to full "
+                f"duplex and the other to auto. Set both ends the same way.")
+        sent, dropped = err.get("out_packets", 0), err.get("drops", 0)
+        if dropped >= DROPS_MIN and sent and dropped / (sent + dropped) >= DROPS_WARN:
+            add("warn", "slow", "Output drops",
+                f"{dropped:,} outgoing packets dropped ({_pct(dropped / (sent + dropped))}) {since}: more traffic "
+                f"than the port or device can take, common on a device linked at 100 Mb or 10 Mb.")
+    mb = _speed_mb(speed)
+    if connected:
+        if "half" in (duplex or "").lower():
+            add("bad", "slow", "Half duplex", "Running at half duplex: slow, and usually a duplex mismatch or a bad "
+                "cable. Devices should normally be full duplex.")
+        if mb == 10:
+            add("warn", "slow", "10 Mb link", "Linked at only 10 Mb: very slow. Usually a bad cable or a device stuck "
+                "at 10 Mb. Try the cable test.")
+        elif mb == 100 and (re.search(r"1000|1G", ptype or "") or name[:2] in ("Gi", "Tw", "Te")):
+            notes.append("Linked at 100 Mb. Fine for older phones and printers; if this device should be gigabit, a "
+                         "damaged wire pair often causes this. Try the cable test.")
+        elif mb:
+            notes.append(f"Linked at {mb // 1000 if mb >= 1000 else mb} {'Gb' if mb >= 1000 else 'Mb'}"
+                         + (", full duplex" if "full" in (duplex or "").lower() else ""))
+    return issues, notes
+
+
+def _add_health(port_out, health, issue_count):
+    issues, notes = health
+    port_out["issues"], port_out["notes"] = issues, notes
+    if issues:
+        issue_count["ports"] += 1
+        for i in issues:
+            issue_count[i["kind"]] += 1
+
+
+def _budget_warnings(budgets, unit, warnings):
+    for num, b in sorted(budgets.items()):
+        if b["available"] and b["remaining"] < POE_LOW * b["available"]:
+            where = "This chassis" if num == 0 else f"{unit} {num}"
+            warnings.append(f"{where} has only {max(b['remaining'], 0):.0f} W of PoE power left (of {b['available']:.0f} W). "
+                            f"New phones or access points may be refused power.")
+
+
+# ---------------------------------------------------------------------------
+# Cable test (TDR) on one port, only when someone asks for it
+# ---------------------------------------------------------------------------
+TDR_WAIT = {"cisco_ios": 8, "dell_powerconnect": 3}     # seconds before the first look at the result
+_pause = time.sleep                                     # tests swap this out
+_PORT_ARG = re.compile(r"^[A-Za-z][A-Za-z-]*\d+(?:/\d+){1,2}$")
+_STILL_RUNNING = re.compile(r"(?i)in progress|not completed|still running")
+_TDR_STATUS = re.compile(
+    r"(?i)\b(normal|ok|good|terminated|open(?: cable)?|short(?:ed| cable)?|impedance mis\w*|impedmis|"
+    r"crosstalk|fault|fail(?:ed)?|not completed|not supported|no cable|unknown(?: test result)?|busy)\b")
+_TDR_GOOD = {"normal", "ok", "good", "terminated"}
+
+
+def parse_tdr(output):
+    """'show cable-diagnostics tdr' (Catalyst stack, Catalyst 4500 or Dell) -> [{"pair", "length", "status"}].
+
+    Length is in metres (None if not given). Dell gives one result for the whole cable, with no pair.
+    """
+    pairs = []
+    for line in (output or "").splitlines():
+        found = list(_TDR_STATUS.finditer(line))
+        if not found or re.search(r"(?i)pair status|distance to fault|^\s*(?:interface|port)\s+(?:speed|result)", line):
+            continue                                                     # nothing, or a column header
+        clean = re.sub(r"\b\d+\s*[MG](?:bps)?\b", " ", line)          # drop speeds like 1000M / 1Gbps
+        # The local pair is whichever comes first: "Pair A" (stacks) or "1-2" (4500); later ones are the far end
+        candidates = [m for m in (re.search(r"Pair\s+([A-D])\b", clean), re.search(r"\b(1-2|3-6|4-5|7-8)\b", clean)) if m]
+        pair = min(candidates, key=lambda m: m.start()) if candidates else None
+        length = re.search(r"(?i)(\d+)\s*(?:\+/?-\s*\d+\s*)?(?:meters|metres|m)\b", clean)
+        pairs.append({"pair": pair.group(1) if pair else "",
+                      "length": int(length.group(1)) if length else None,
+                      "status": found[-1].group(1).lower()})
+    return pairs
+
+
+def tdr_verdict(pairs, link_up):
+    """("good" | "problem" | "unknown", what it means in plain words)."""
+    if not pairs:
+        return "unknown", "The switch didn't give a result. Try again, or run the test from the CLI."
+    bad = [p for p in pairs if p["status"] not in _TDR_GOOD]
+    lengths = [p["length"] for p in pairs if p["length"] is not None]
+    if not bad:
+        return "good", "Cable looks good" + (f": about {max(lengths)} m long." if lengths else ".")
+    groups = {}
+    for p in bad:
+        kind = ("open" if p["status"].startswith("open") else "short" if p["status"].startswith("short") else
+                "impedance" if "imped" in p["status"] else "unfinished" if p["status"] in ("not completed", "busy") else
+                "unsupported" if p["status"] == "not supported" else "nocable" if p["status"] == "no cable" else "other")
+        groups.setdefault((kind, p["length"], p["status"]), []).append(p["pair"])
+    parts = []
+    for (kind, length, status), names in groups.items():
+        named = [n for n in names if n]
+        who = ("All pairs are" if len(named) >= 4 else ("Pairs " + ", ".join(named) + " are") if len(named) > 1
+               else f"Pair {named[0]} is" if named else "The cable is")
+        where = f" at about {length} m" if length is not None else ""
+        if kind == "open":
+            far = (f" If the run is about {length} m long, nothing is plugged in at the far end (wall jack or device)."
+                   if not link_up and length is not None else "")
+            parts.append(f"{who} open{where}: a break or loose connection there.{far}")
+        elif kind == "short":
+            parts.append(f"{who} shorted{where}: wires touching. Re-terminate or replace the cable.")
+        elif kind == "impedance":
+            parts.append(f"{who} mismatched (impedance){where}: damaged or poor-quality cable, or a bad patch cord or "
+                         f"jack there. Causes errors and slow speeds.")
+        elif kind == "unfinished":
+            parts.append("The test didn't finish" + (f" on {', '.join(named)}" if named else "") + ". Try again.")
+        elif kind == "unsupported":
+            parts.append("This port doesn't support the cable test (fiber and most 10G ports don't).")
+        elif kind == "nocable":
+            parts.append("No cable detected: nothing is plugged into this port.")
+        else:
+            parts.append(f"{who} reported '{status}'{where}.")
+    return "problem", " ".join(parts)
+
+
+def _dell_error_counters(output):
+    """Per-port 'show interfaces counters <port>' on a Dell -> the error counters that aren't zero."""
+    found = []
+    for name, value in re.findall(r"([A-Za-z][A-Za-z /-]+?)\s*:\s*(\d+)", output or ""):
+        if int(value) and re.search(r"(?i)error|fcs|align|collision|oversize|undersize|fragment|jabber|discard", name):
+            found.append(f"{name.strip()}: {int(value):,}")
+    return found
+
+
+def run_cable_test(address, vendor, protocol, login, port, timeout=20, slow=False):
+    """Run the cable test (TDR) on one port and read the result, plus that port's errors and power now.
+
+    The link drops for a few seconds (about a minute on a 4500 line card), and a powered device restarts.
+    """
+    port = (port or "").strip()
+    if not _PORT_ARG.fullmatch(port):
+        raise ValueError("That isn't a port name.")
+    cisco = vendor != "dell_powerconnect"
+    started = datetime.now()
+    with sw.connect(address, vendor, protocol, login, timeout) as conn:
+        out = conn.send_command_timing(f"test cable-diagnostics tdr interface {port}", read_timeout=60)
+        if re.search(r"(?i)yes/no", out):
+            out += "\n" + conn.send_command_timing("yes", read_timeout=120)
+        elif re.search(r"(?i)\[confirm\]", out):
+            out += "\n" + conn.send_command_timing("\n", read_timeout=120)
+        elif re.search(r"(?i)\(y/n\)|\[y/n\]|are you sure|continue\?", out):
+            out += "\n" + conn.send_command_timing("y", read_timeout=120)
+        # A '%' line is the switch saying no ("% TDR test is not supported..."); log messages like
+        # "%LINK-3-UPDOWN:" are just the link dropping for the test.
+        said_no = [ln.strip(" %") for ln in out.splitlines()
+                   if ln.strip().startswith("%") and not re.match(r"\s*%[A-Z0-9_]+-\d-[A-Z0-9_]+:", ln)]
+        if said_no or sw.ERROR_TEXT.search(out) or re.search(r"(?i)not supported|administratively down", out):
+            return {"ok": False, "raw": out,
+                    "problem": said_no[0] if said_no else "The switch wouldn't run the cable test on this port."}
+        _pause(TDR_WAIT[vendor] * (6 if slow else 1))
+        deadline = time.monotonic() + (90 if slow else 30)
+        while True:
+            result = conn.send_command(f"show cable-diagnostics tdr interface {port}", read_timeout=60)
+            if not _STILL_RUNNING.search(result) or time.monotonic() > deadline:
+                break
+            _pause(4)
+        counters = conn.send_command(f"show interfaces {port}" if cisco else f"show interfaces counters {port}",
+                                     read_timeout=60)
+        power = conn.send_command(f"show power inline {port}", read_timeout=60)
+
+    pairs = parse_tdr(result) or parse_tdr(out)
+    link_up = bool(re.search(r"(?im)\bis up, line protocol is up", counters)) if cisco else None
+    verdict, summary = tdr_verdict(pairs, link_up)
+    now_issues, now_notes = [], []
+    if cisco:
+        err = next(iter(parse_ios_errors(counters).values()), None)
+        speed = re.search(r"(Full|Half)-duplex,\s*(\d+)\s*([MG])b/s", counters)
+        now_issues, now_notes = port_health(normalize_intf(port), bool(link_up),
+                                            f"{speed.group(2)}{speed.group(3)}" if speed else "",
+                                            speed.group(1) if speed else "", "", err, None, None, None)
+    else:
+        found = _dell_error_counters(counters)
+        if found:
+            now_notes.append("Error counters: " + ", ".join(found))
+    poe = next(iter(parse_power_inline(power, vendor)[0].values()), None)
+    if poe:
+        p_issues, p_notes = port_health(normalize_intf(port), False, "", "", "", None, poe, None, None)
+        now_issues += p_issues
+        now_notes += p_notes
+    for issue in now_issues:                 # they've just run it
+        issue["text"] = issue["text"].replace(" Try the cable test.", "")
+    return {"ok": True, "verdict": verdict, "summary": summary, "pairs": pairs,
+            "checked": started.strftime("%Y-%m-%d %H:%M"), "issues": now_issues, "notes": now_notes,
+            "raw": "\n\n".join(x.strip() for x in (out, result) if x and x.strip())}
 
 
 def _vlan_legend(vlan_counts):
@@ -1171,6 +1530,7 @@ def run_topology(address, protocol, login, months=6, timeout=20, data_dir=None, 
         pass                                # a full or read-only disk shouldn't stop the drawing
     data, history = build_stack(outputs, address, months, load_history(data_dir, address), where=where,
                                 vendor=vendor)
+    data["protocol"] = protocol
     save_history(data_dir, address, history)
     html = render_html(data)
     return data, html, save_page(data_dir, data, html)

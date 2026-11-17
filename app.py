@@ -344,6 +344,42 @@ def topology_run():
     return jsonify({"ok": True, "url": f"/topology/page/{path.name}", "summary": data["summary"]})
 
 
+@app.post("/api/topology/cable-test")
+def topology_cable_test():
+    """Run the cable test (TDR) on one port. The page asks the user to confirm first: the link drops."""
+    payload = request.json or {}
+    address = str(payload.get("address", "")).strip()
+    port = str(payload.get("port", "")).strip()
+    saved = next((s for s in load_switches() if s["address"] == address), None)
+    settings = load_settings()
+    protocol = sw.clean_protocol(payload.get("protocol") or (saved or {}).get("protocol")
+                                 or settings["default_protocol"])
+    vendor = (saved or {}).get("type") or sw.clean_type(payload.get("vendor") or "cisco_ios")
+    problems = []
+    if not address or address.startswith("demo-"):
+        problems.append("The cable test only works on a real switch, not the made-up sample.")
+    elif vendor not in topology.VENDORS:
+        problems.append("The cable test works on Cisco Catalyst and Dell PowerConnect switches only.")
+    if not protocol:
+        problems.append("Connection must be SSH or Telnet.")
+    login = logins_from(payload)["telnet"]
+    if not login.password:
+        problems.append("Enter the password.")
+    if problems:
+        return jsonify({"ok": False, "problems": problems}), 400
+    try:
+        result = topology.run_cable_test(address, vendor, protocol, login, port, int(settings["timeout"]),
+                                         slow=bool(payload.get("chassis")))
+    except ValueError as exc:
+        return jsonify({"ok": False, "problems": [str(exc)]}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "problems": [f"Couldn't test {port} on {address}: "
+                                                  f"{sw.friendly_error(exc)}"]}), 502
+    if not result["ok"]:
+        return jsonify({"ok": False, "problems": [result["problem"]], "raw": result.get("raw", "")}), 409
+    return jsonify(result)
+
+
 @app.get("/topology/page/<name>")
 def topology_page(name):
     pages = (TOPOLOGY_DIR / "pages").resolve()

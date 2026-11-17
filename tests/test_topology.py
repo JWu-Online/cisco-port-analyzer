@@ -8,6 +8,7 @@ No real switches needed.
 """
 
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timedelta
@@ -382,6 +383,187 @@ Mod Ports Card Type                              Model              Serial No.
     return ok
 
 
+# ---------------------------------------------------------------------------
+# Port health: PoE and slow-connection signs, and the cable test (TDR)
+# ---------------------------------------------------------------------------
+POWER_STACK = """Module   Available     Used     Remaining
+          (Watts)     (Watts)    (Watts)
+------   ---------   --------   ---------
+1           435.0      410.8        24.2
+2           435.0      122.4       312.6
+Interface Admin  Oper       Power   Device              Class Max
+                            (Watts)
+--------- ------ ---------- ------- ------------------- ----- ----
+Gi1/0/1   auto   on         5.9     IP Phone 8845       2     30.0
+Gi1/0/2   auto   off        0.0     n/a                 n/a   30.0
+Gi1/0/3   auto   faulty     0.0     n/a                 n/a   30.0
+Gi1/0/4   auto   power-deny 0.0     Ieee PD             4     30.0
+Gi2/0/7   auto   on         15.4    AIR-AP2802I-B-K9    4     30.0
+Gi2/0/8   auto   errdisable 0.0     n/a                 n/a   30.0
+"""
+POWER_4500 = """Available:800(w)  Used:742(w)  Remaining:58(w)
+
+Interface Admin  Oper            Power(Watts)     Device              Class
+                           From PS    To Device
+--------- ------ ---------- ---------- ---------- ------------------- -----
+Gi2/1     auto   on         17.3       15.4       Ieee PD             3
+Gi2/2     auto   off        0.0        0.0        n/a                 n/a
+"""
+POWER_SINGLE = """Available:370.0(w)  Used:21.4(w)  Remaining:348.6(w)
+
+Interface Admin  Oper       Power   Device              Class Max
+                            (Watts)
+--------- ------ ---------- ------- ------------------- ----- ----
+Gi1/0/1   auto   on         21.4    Ieee PD             4     30.0
+"""
+POWER_DELL = """
+Unit  Power  Nominal Power  Consumed Power  Usage Threshold  Traps
+----  -----  -------------  --------------  ---------------  -------
+1     On     370 Watts      46 Watts (12%)  95               Disable
+
+Port      Powered Device       State          Status      Priority   Class
+--------- -------------------- -------------- ----------- ---------- ----------
+gi1/0/1                        Auto           Searching   low        class0
+gi1/0/2   IP-phone             Auto           On          low        class2
+gi1/0/3                        Auto           Fault       low        class0
+"""
+TDR_STACK = """TDR test last run on: November 17 14:20:12
+
+Interface Speed Local pair Pair length        Remote pair Pair status
+--------- ----- ---------- ------------------ ----------- --------------------
+Gi1/0/5   1000M Pair A     31   +/- 5  meters Pair B      Normal
+                Pair B     31   +/- 5  meters Pair A      Normal
+                Pair C     24   +/- 5  meters Pair D      Impedance Mismatch
+                Pair D     31   +/- 5  meters Pair C      Normal
+"""
+TDR_4500 = """Interface   Speed  Pair  Cable Length  Distance to fault  Channel  Pair status
+---------   -----  ----  ------------  -----------------  -------  -----------
+Gi2/1       1Gbps  1-2   5 +/-1m       N/A                Pair B   Terminated
+                   3-6   5 +/-1m       N/A                Pair A   Terminated
+                   4-5   N/A           2 +/-1m            Pair D   Shorted
+                   7-8   5 +/-1m       N/A                Pair C   Terminated
+"""
+TDR_UNPLUGGED = """Interface Speed Local pair Pair length        Remote pair Pair status
+--------- ----- ---------- ------------------ ----------- --------------------
+Gi1/0/7   auto  Pair A     41   +/- 5  meters N/A         Open
+                Pair B     41   +/- 5  meters N/A         Open
+                Pair C     41   +/- 5  meters N/A         Open
+                Pair D     41   +/- 5  meters N/A         Open
+"""
+TDR_IN_PROGRESS = "TDR test is in progress on interface Gi1/0/5"
+
+
+def health():
+    ok = True
+    print("\nPort health: power")
+    ports, budgets = T.parse_power_inline(POWER_STACK)
+    ok &= check("stack: power left per member", budgets[1]["remaining"] == 24.2 and budgets[2]["used"] == 122.4, budgets)
+    ok &= check("stack: what each port powers", ports["Gi1/0/1"] == {"state": "on", "watts": 5.9, "device": "IP Phone 8845",
+                                                                     "cls": "2"} and ports["Gi2/0/7"]["watts"] == 15.4, ports)
+    ok &= check("stack: fault, denied and err-disabled power", (ports["Gi1/0/3"]["state"], ports["Gi1/0/4"]["state"],
+                ports["Gi2/0/8"]["state"]) == ("faulty", "power-deny", "errdisable"), ports)
+    ports, budgets = T.parse_power_inline(POWER_4500)
+    ok &= check("4500: chassis budget, watts to the device", budgets == {0: {"available": 800, "used": 742, "remaining": 58}}
+                and ports["Gi2/1"]["watts"] == 15.4 and ports["Gi2/1"]["cls"] == "3", (budgets, ports))
+    ports, budgets = T.parse_power_inline(POWER_DELL, "dell_powerconnect")
+    ok &= check("Dell: unit budget and port states", budgets[1] == {"available": 370, "used": 46, "remaining": 324}
+                and ports["Gi1/0/2"]["device"] == "IP-phone" and ports["Gi1/0/2"]["cls"] == "2"
+                and ports["Gi1/0/3"]["state"] == "fault", (budgets, ports))
+
+    def titles(health):
+        return [i["title"] for i in health[0]]
+    fault = T.port_health("Gi1/0/3", False, "", "", "", None, {"state": "faulty", "watts": 0, "device": "", "cls": ""},
+                          None, None)
+    deny = T.port_health("Gi1/0/4", False, "", "", "", None, {"state": "power-deny", "watts": 0, "device": "", "cls": "4"},
+                         {"available": 435, "used": 410.8, "remaining": 24.2}, None)
+    on = T.port_health("Gi1/0/1", True, "a-1000", "a-full", "10/100/1000BaseTX", None,
+                       {"state": "on", "watts": 5.9, "device": "IP Phone 8845", "cls": "2"}, None, None)
+    ok &= check("PoE fault and denied are problems, with the budget left",
+                titles(fault) == ["PoE fault"] and titles(deny) == ["PoE denied"] and "24 W left of 435 W" in deny[0][0]["text"],
+                (fault, deny))
+    ok &= check("a powered phone is a note, not a problem", on[0] == [] and on[1][0] == "Powering IP Phone 8845 · 5.9 W · class 2"
+                and on[1][1] == "Linked at 1 Gb, full duplex", on)
+
+    print("\nPort health: slow connections")
+    uptime = timedelta(days=400)
+    def errs(**kw):
+        base = {"in_packets": 1_000_000, "out_packets": 2_000_000, "in_errors": 0, "crc": 0, "late": 0, "drops": 0,
+                "cleared": "never"}
+        base.update(kw)
+        return base
+    crc_bad = T.port_health("Gi1/0/5", True, "a-1000", "a-full", "", errs(crc=4000, in_errors=4000), None, None, uptime)
+    crc_warn = T.port_health("Gi1/0/5", True, "a-1000", "a-full", "", errs(crc=300, in_errors=300), None, None, uptime)
+    crc_noise = T.port_health("Gi1/0/5", True, "a-1000", "a-full", "", errs(crc=40, in_errors=40), None, None, uptime)
+    ok &= check("receive errors: 0.4% bad, 0.03% a warning, a few dozen ignored",
+                [i["level"] for i in crc_bad[0]] == ["bad"] and [i["level"] for i in crc_warn[0]] == ["warn"]
+                and crc_noise[0] == [] and "since the switch started 13 months ago" in crc_bad[0][0]["text"],
+                (crc_bad, crc_warn, crc_noise))
+    late = T.port_health("Gi1/0/17", True, "a-1000", "a-full", "", errs(late=12), None, None, uptime)
+    drops = T.port_health("Gi1/0/30", True, "a-100", "a-full", "", errs(drops=50_000), None, None, uptime)
+    cleared = T.port_health("Gi1/0/5", True, "a-1000", "a-full", "", errs(crc=4000, cleared="2w3d"), None, None, uptime)
+    ok &= check("late collisions, output drops, and counters cleared 2w3d ago",
+                titles(late) == ["Late collisions"] and titles(drops) == ["Output drops"]
+                and "in the 2 weeks since the counters were cleared" in cleared[0][0]["text"], (late, drops, cleared))
+    half = T.port_health("Gi2/0/9", True, "a-100", "a-half", "10/100/1000BaseTX", None, None, None, None)
+    ten = T.port_health("Gi2/0/22", True, "a-10", "a-full", "10/100/1000BaseTX", None, None, None, None)
+    hundred = T.port_health("Gi1/0/11", True, "a-100", "a-full", "10/100/1000BaseTX", None, None, None, None)
+    fast = T.port_health("Fa0/11", True, "a-100", "a-full", "10/100BaseTX", None, None, None, None)
+    ok &= check("half duplex and 10 Mb are problems; 100 Mb on gigabit is only a note",
+                titles(half) == ["Half duplex"] and titles(ten) == ["10 Mb link"] and hundred[0] == []
+                and "100 Mb" in hundred[1][0] and fast[1] == ["Linked at 100 Mb, full duplex"], (half, ten, hundred, fast))
+    errors = T.parse_ios_errors(demo_outputs()["interfaces"])
+    ok &= check("counters read from 'show interfaces'", errors["Gi1/0/17"]["late"] == 233
+                and errors["Gi1/0/5"]["crc"] > 1000 and errors["Gi1/0/5"]["cleared"] == "never", errors.get("Gi1/0/17"))
+
+    print("\nPort health on the drawings")
+    data, _ = T.build_stack(demo_outputs(), "demo-stack", 6, now=NOW)
+    flagged = {p["name"]: [i["title"] for i in p["issues"]] for m in data["members"] for p in m["ports"] if p.get("issues")}
+    ok &= check("Cisco demo: the seven made-up problems, nothing else", flagged == {
+        "Gi1/0/5": ["Receive errors"], "Gi1/0/17": ["Late collisions"], "Gi1/0/30": ["Output drops"],
+        "Gi1/0/40": ["PoE denied"], "Gi2/0/9": ["Half duplex"], "Gi2/0/22": ["10 Mb link"], "Gi2/0/31": ["PoE fault"]}
+        and data["issues"] == {"ports": 7, "power": 2, "slow": 5}, flagged)
+    ok &= check("low PoE budget warned about, per member",
+                any("Switch 1 has only 24 W of PoE power left" in w for w in data["warnings"])
+                and data["members"][0]["poe"]["remaining"] == 24.2, data["warnings"])
+    lone = {k: v for k, v in demo_outputs().items() if k in ("prompt", "version", "status", "vlans")}
+    lone["status"] = "\n".join(ln for ln in lone["status"].splitlines() if not re.match(r"Gi[23]/", ln))
+    lone["power"] = POWER_SINGLE
+    single, _ = T.build_stack(lone, "x", 6, now=NOW)
+    ok &= check("a lone switch's 'Available:' line counts as switch 1", len(single["members"]) == 1
+                and (single["members"][0]["poe"] or {}).get("available") == 370, single["members"][0].get("poe"))
+    ddata, _ = T.build_stack(dell_demo_outputs(), "demo-dell", 6, now=NOW, vendor="dell_powerconnect")
+    dflag = {p["name"]: [i["title"] for i in p["issues"]] for m in ddata["members"] for p in m["ports"] if p.get("issues")}
+    ok &= check("Dell demo: half duplex and a PoE fault", dflag == {"gi1/0/14": ["Half duplex"], "gi2/0/7": ["PoE fault"]}
+                and ddata["members"][0]["poe"]["used"] == 46, dflag)
+    html = T.render_html(data)
+    ok &= check("page has the Issues filter and the cable test", "Issues" in html and "Run cable test" in html
+                and "/api/topology/cable-test" in html)
+
+    print("\nCable test results")
+    pairs = T.parse_tdr(TDR_STACK)
+    verdict = T.tdr_verdict(pairs, True)
+    ok &= check("stack: four pairs read, damaged pair C at 24 m",
+                [(p["pair"], p["length"], p["status"]) for p in pairs] == [("A", 31, "normal"), ("B", 31, "normal"),
+                ("C", 24, "impedance mismatch"), ("D", 31, "normal")]
+                and verdict[0] == "problem" and verdict[1].startswith("Pair C is mismatched (impedance) at about 24 m"),
+                (pairs, verdict))
+    good = T.tdr_verdict(T.parse_tdr(TDR_STACK.replace("Impedance Mismatch", "Normal")), True)
+    ok &= check("all pairs normal -> good, with the length", good == ("good", "Cable looks good: about 31 m long."), good)
+    pairs = T.parse_tdr(TDR_4500)
+    verdict = T.tdr_verdict(pairs, True)
+    ok &= check("4500: pairs named 1-2 .. 7-8, short on 4-5 at 2 m",
+                [p["pair"] for p in pairs] == ["1-2", "3-6", "4-5", "7-8"] and pairs[2]["length"] == 2
+                and verdict[1].startswith("Pair 4-5 is shorted at about 2 m"), (pairs, verdict))
+    verdict = T.tdr_verdict(T.parse_tdr(TDR_UNPLUGGED), False)
+    ok &= check("all pairs open at the same length, no link -> nothing plugged in at the far end",
+                verdict[0] == "problem" and "All pairs are open at about 41 m" in verdict[1]
+                and "nothing is plugged in at the far end" in verdict[1], verdict)
+    verdict = T.tdr_verdict(T.parse_tdr("Cable on port gi1/0/3 is open at 64 m"), False)
+    ok &= check("Dell: one answer for the cable", verdict[1].startswith("The cable is open at about 64 m"), verdict)
+    ok &= check("no result -> unknown", T.tdr_verdict(T.parse_tdr("TDR test last run on: never"), True)[0] == "unknown")
+    return ok
+
+
 def json_copy(x):
     import json
     return json.loads(json.dumps(x))
@@ -436,6 +618,63 @@ def end_to_end():
     pages = client.get("/api/topology/pages", **base).json["pages"]
     ok &= check("earlier drawings are listed", len(pages) >= 1 and pages[0]["name"] == "DEMO-IDF-E3", pages)
 
+    print("\nCable test on one port")
+    T.TDR_WAIT = {"cisco_ios": 0, "dell_powerconnect": 0}
+    polls = {"n": 0}
+    real_send = MockCLI.handle
+    cli.outputs["test cable-diagnostics tdr interface Gi1/0/5"] = (
+        "Link state may be affected during TDR test\nTDR test started on interface Gi1/0/5\n"
+        "A TDR test can take a few seconds to run on an interface\nUse 'show cable-diagnostics tdr' to read the TDR results.")
+    cli.outputs["show interfaces Gi1/0/5"] = (
+        "GigabitEthernet1/0/5 is up, line protocol is up (connected)\n  Full-duplex, 1000Mb/s, media type is 10/100/1000BaseTX\n"
+        '  Last clearing of "show interface" counters never\n'
+        "  Input queue: 0/2000/0/0 (size/max/drops/flushes); Total output drops: 0\n"
+        "     2000000 packets input, 960000000 bytes, 0 no buffer\n     9120 input errors, 9120 CRC, 0 frame\n"
+        "     4000000 packets output, 1680000000 bytes, 0 underruns\n     0 late collision, 0 deferred")
+    cli.outputs["show power inline Gi1/0/5"] = (
+        "Interface Admin  Oper       Power   Device              Class Max\n"
+        "--------- ------ ---------- ------- ------------------- ----- ----\n"
+        "Gi1/0/5   auto   on         5.9     IP Phone 8845       2     30.0")
+    cli.outputs["test cable-diagnostics tdr interface Te1/1/1"] = "% TDR test is not supported on this interface"
+
+    def handle(self, line):              # the first look finds the test still running
+        if line.strip() == "show cable-diagnostics tdr interface Gi1/0/5":
+            self.commands.append(line.strip())
+            polls["n"] += 1
+            return (TDR_IN_PROGRESS if polls["n"] == 1 else TDR_STACK) + "\n"
+        return real_send(self, line)
+    MockCLI.handle = handle
+    real_pause = T._pause
+    T._pause = lambda s: None
+    try:
+        r = client.post("/api/topology/cable-test", json={"address": addr, "port": "Gi1/0/5", **login}, **base)
+        res = r.json
+        ok &= check("cable test runs and reads the result", r.status_code == 200 and res["verdict"] == "problem"
+                    and res["pairs"][2]["status"] == "impedance mismatch" and polls["n"] == 2, res)
+        ok &= check("errors and power read fresh for that port",
+                    [i["title"] for i in res["issues"]] == ["Receive errors"] and "Try the cable test" not in res["issues"][0]["text"]
+                    and any(n.startswith("Powering IP Phone 8845") for n in res["notes"]), res)
+        sent = [c for c in cli.commands if c.endswith("Gi1/0/5")]
+        ok &= check("test, then the result (asked again while running), then errors and power", sent == [
+            "test cable-diagnostics tdr interface Gi1/0/5", "show cable-diagnostics tdr interface Gi1/0/5",
+            "show cable-diagnostics tdr interface Gi1/0/5", "show interfaces Gi1/0/5", "show power inline Gi1/0/5"], sent)
+        r = client.post("/api/topology/cable-test", json={"address": addr, "port": "Te1/1/1", **login}, **base)
+        ok &= check("a port that can't be tested -> the switch's own words", r.status_code == 409
+                    and "not supported" in r.json["problems"][0], r.json)
+        before = len(cli.commands)
+        r = client.post("/api/topology/cable-test", json={"address": addr, "port": "Gi1/0/5\nreload", **login}, **base)
+        ok &= check("anything but a port name is refused before logging in", r.status_code == 400
+                    and len(cli.commands) == before, r.json)
+        r = client.post("/api/topology/cable-test", json={"address": "demo-stack", "port": "Gi1/0/5", **login}, **base)
+        ok &= check("the made-up stack can't be tested", r.status_code == 400, r.json)
+        r = client.post("/api/topology/cable-test", json={"address": addr, "port": "Gi1/0/5", "username": "netops"}, **base)
+        ok &= check("no password -> asked for it", r.status_code == 400 and "password" in r.json["problems"][0], r.json)
+        r = client.post("/api/topology/cable-test", data="{}", **base)
+        ok &= check("non-JSON posts refused", r.status_code == 415)
+    finally:
+        MockCLI.handle = real_send
+        T._pause = real_pause
+
     print("\nA Dell PowerConnect stack")
     r = client.post("/api/topology", json={"address": f"127.0.0.1:{dell.port}", "months": 6, **login}, **base)
     ok &= check("Dell stack read and drawn", r.status_code == 200 and r.json["ok"], r.json)
@@ -480,6 +719,7 @@ def main():
     ok = parsers()
     ok &= dell_and_translation()
     ok &= chassis()
+    ok &= health()
     ok &= end_to_end()
     print("\nALL PASSED" if ok else "\nSOME CHECKS FAILED")
     return 0 if ok else 1
