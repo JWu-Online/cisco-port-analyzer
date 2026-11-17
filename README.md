@@ -80,12 +80,14 @@ Click a switch to see only its ports. The table below starts on **Inactive** por
 
 ## Stack topology
 
-Click **Stack topology** at the top of the page to draw one Cisco stack. Every member is drawn as its own front panel with ports 1–48, and each port shows its VLAN. Color the ports by **Use** (green in use, empty socket unused, amber can't tell) or by **VLAN**. The stack cables between members are drawn on the left, and you get a warning if the stack ring is broken.
+Click **Stack topology** at the top of the page to draw one **Cisco Catalyst** or **Dell PowerConnect 5500** (5524, 5548, 5548P) stack. Every member is drawn as its own front panel with ports 1–48, and each port shows its VLAN. Color the ports by **Use** (green in use, empty socket unused, amber can't tell) or by **VLAN**. The stack cables between members are drawn on the left, and you get a warning if the stack ring is broken.
 
-1. Pick a Cisco switch from your switch list, or choose **Another address…** and type one.
+1. Pick a Cisco or Dell switch from your switch list, or choose **Another address…** and type one (and pick its type).
 2. Enter your login and click **Draw stack**.
 
 Hover over a port for its description, VLAN number and name (from `show vlan brief`), status and why it got its result. Switch to **Table** for a sortable list, or click **Download CSV**.
+
+**Copying between a Cisco and a Dell:** in the port panel and the move list, **New switch is** picks the brand you're pasting onto. Same brand as the old switch: the port's lines are copied exactly. Other brand: the settings both understand are rewritten the new switch's way (description, access or trunk, VLANs, voice VLAN, portfast, BPDU guard, shutdown), and anything else is listed as "not carried over" so you can add it by hand. Dell scripts use `configure`, an `exit` after each port, and no `!` comments; `default interface` is Cisco-only.
 
 **Copying a port's config:** click any port (or a row in the Table) to open its panel. It shows the port's config from the switch with a **Copy config** button. Under **Paste onto another port**, type the new port (like `Gi2/0/14`) or click **Pick on the page**, and it rewrites the config for that port, ready to paste into the new switch. You can add `configure terminal` / `end` around it, and `default interface` to wipe the new port first. Reading configs needs privileged access: if the login doesn't land at the `#` prompt, fill in the enable password. Only the port sections are kept; a port line with a key or password is left out and marked with `!`.
 
@@ -105,10 +107,14 @@ It decides Active, Inactive and Unsure a bit more carefully than the main check,
 
 Each drawing remembers what it saw in `data\topology\history`. If you draw the same stack at least every few days, it remembers ports that were in use before a restart, so fewer show as Unsure.
 
+**Dell PowerConnect is different:** it doesn't record when a port was last used, only how many packets each port has moved since the switch started. So a port is Active if its link is up, or it had traffic and the switch started less than the months you picked ago, or its count went up since an earlier drawing. It's Inactive if it has had no traffic at all since a start longer ago than that, or its count hasn't moved across drawings that cover that long. On the first drawing, ports that had traffic at some point but are down now show as **Unsure**. Draw the stack again every week or two and they sort themselves out. The Dell's stack cables aren't drawn.
+
 From the command line:
 ```
 .venv\Scripts\python topology.py 10.99.4.11 -u admin -p telnet -m 6
+.venv\Scripts\python topology.py 10.99.8.20 -u admin -t dell
 .venv\Scripts\python topology.py --demo
+.venv\Scripts\python topology.py --demo -t dell
 ```
 
 ## How it knows when a port was last used
@@ -168,8 +174,8 @@ app.py              web app (Flask, served by waitress on 127.0.0.1 only)
 analyzer.py         reading each switch type's ports, deciding Inactive/Unsure/Active, the command line
 switches.py         logging in over SSH/telnet for each switch type
 report.py           the Excel report
-topology.py         Stack topology: reading a Cisco stack, deciding each port, the saved page
-topology_demo.py    a made-up stack for the example page and the tests
+topology.py         Stack topology: reading a Cisco or Dell stack, deciding each port, Cisco/Dell config translation, the saved page
+topology_demo.py    made-up Cisco and Dell stacks for the example pages and the tests
 templates/, static/ the pages
 examples/           a made-up switch list
 tests/              pretend switches, sample output for each type, end-to-end tests

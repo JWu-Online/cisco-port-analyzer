@@ -271,6 +271,10 @@
   .target-row input.bad { border-color: var(--danger); }
   .check { display: flex; gap: 8px; align-items: flex-start; font-size: 0.88rem; margin: 4px 0; }
   .check small { display: block; color: var(--ink-3); }
+  .check input:disabled + span { color: var(--ink-3); }
+  .vendor-row { display: flex; align-items: center; gap: 10px; font-size: 0.88rem; margin: 0 0 8px; }
+  .drawer select { font: inherit; font-size: 0.88rem; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px;
+                   background: var(--surface); color: var(--ink); }
   .pick-banner { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 30; background: var(--ink); color: var(--bg);
                  padding: 9px 16px; border-radius: 6px; font-weight: 600; font-size: 0.9rem; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
   .pick-banner button { margin-left: 12px; font: inherit; font-size: 0.85rem; background: none; border: 1px solid currentColor;
@@ -483,6 +487,19 @@
 
   <details class="how">
     <summary>How this page decides Active, Inactive and Unsure</summary>
+{% if data.vendor == "dell_powerconnect" %}
+    <p>A Dell PowerConnect doesn't record when a port was last used, only how many packets it has moved since the
+      switch started. So a port is <strong>Active</strong> if any of these is true:</p>
+    <ol>
+      <li>Its link is up right now.</li>
+      <li>It has had traffic since the switch started, and that was less than {{ '%g'|format(data.months) }} months ago.</li>
+      <li>Its packet count went up since an earlier drawing of this stack, or an earlier drawing saw it up.</li>
+    </ol>
+    <p>It's <strong>Inactive</strong> if it has had no traffic at all since the switch started more than
+      {{ '%g'|format(data.months) }} months ago, or if its count hasn't moved across drawings that cover
+      {{ '%g'|format(data.months) }} months. Anything else is <strong>Unsure</strong>: draw the stack again over the
+      coming weeks and those ports sort themselves out.</p>
+{% else %}
     <p>A port is <strong>Active</strong> if any of these happened in the last {{ '%g'|format(data.months) }} months:</p>
     <ol>
       <li>Its link is up right now.</li>
@@ -494,6 +511,7 @@
     <p>Otherwise it's <strong>Inactive</strong>, but only if the switch can see back {{ '%g'|format(data.months) }} months:
       its uptime, plus earlier runs. A member that restarted recently has forgotten its history, so its idle ports
       are <strong>Unsure</strong> until enough time passes or earlier runs cover the gap.</p>
+{% endif %}
     <p>This stack: run {{ data.history_runs }}, history since {{ data.history_since }}.</p>
   </details>
   <p class="foot">Port Analyzer · Stack topology</p>
@@ -520,13 +538,15 @@
       <p class="mv-empty" id="mv-empty">Nothing yet. Click ports on the front panels, or use “Add active ports from…”.</p>
     </div>
     <div class="mv-side">
+      <label class="lbl">New switch is
+        <select id="mv-vendor"><option value="cisco_ios">Cisco Catalyst</option><option value="dell_powerconnect">Dell PowerConnect</option></select></label>
       <label class="lbl">New ports start at <input id="mv-start" value="Gi1/0/1" spellcheck="false" autocomplete="off"></label>
       <label class="lbl">Ports per new switch
         <select id="mv-per"><option>48</option><option>24</option><option>16</option><option>12</option><option>8</option></select></label>
       <label class="check"><input type="checkbox" id="mv-wrap" checked>
-        <span>Add <span class="mono">configure terminal</span> and <span class="mono">end</span></span></label>
+        <span>Add <span class="mono cfg-in">configure terminal</span> and <span class="mono">end</span></span></label>
       <label class="check"><input type="checkbox" id="mv-wipe">
-        <span>Wipe each new port first (<span class="mono">default interface</span>)</span></label>
+        <span>Wipe each new port first (<span class="mono">default interface</span>)<small class="wipe-note"></small></span></label>
       <div class="mv-notes" id="mv-notes"></div>
       <div class="mv-actions">
         <button type="button" class="btn primary" id="mv-copy">Copy config for the new switch</button>
@@ -557,16 +577,19 @@
     <div id="d-paste">
       <h3>Paste onto another port</h3>
       <p class="muted" style="margin:0 0 8px">Type the new port, or pick one on this page. Then copy and paste it into the new switch's CLI.</p>
+      <label class="vendor-row">New switch is
+        <select id="d-vendor"><option value="cisco_ios">Cisco Catalyst</option><option value="dell_powerconnect">Dell PowerConnect</option></select></label>
       <div class="target-row">
         <input id="d-target" placeholder="Gi2/0/14" aria-label="Target port" autocomplete="off" spellcheck="false">
         <button type="button" class="btn" id="d-pick">Pick on the page</button>
       </div>
       <p class="muted" id="d-target-msg" hidden></p>
       <label class="check"><input type="checkbox" id="d-wrap" checked>
-        <span>Add <span class="mono">configure terminal</span> and <span class="mono">end</span><small>So it pastes straight in from the <span class="mono">#</span> prompt.</small></span></label>
+        <span>Add <span class="mono cfg-in">configure terminal</span> and <span class="mono">end</span><small>So it pastes straight in from the <span class="mono">#</span> prompt.</small></span></label>
       <label class="check"><input type="checkbox" id="d-clear">
-        <span>Wipe the target port first (<span class="mono">default interface</span>)<small>Removes whatever is on the new port now, so it ends up an exact copy.</small></span></label>
+        <span>Wipe the target port first (<span class="mono">default interface</span>)<small class="wipe-note">Removes whatever is on the new port now, so it ends up an exact copy.</small></span></label>
       <pre class="cfg" id="d-script"></pre>
+      <div id="d-notes"></div>
       <div class="btn-row"><button type="button" class="btn primary" id="d-copy-script">Copy for the new port</button><span class="copied" id="d-copied-script"></span></div>
     </div>
   </div>
@@ -946,8 +969,51 @@
     if (!hit && fulls.length === 1) hit = fulls[0];
     return hit ? hit + m[2] : null;
   }
-  function ifName(p) { return p.ifname || longName(p.name) || p.name; }
-  function configText(p) { return ["interface " + ifName(p)].concat(p.config || []).join("\n"); }
+  // Dell PowerConnect names: "gi2/0/14", "gig2/0/14" or "gigabitethernet2/0/14" -> "gigabitethernet2/0/14"
+  var DELL_LONG = { gi: "gigabitethernet", te: "tengigabitethernet", fa: "fastethernet" };
+  function dellName(text) {
+    var m = /^\s*([A-Za-z-]+)\s*(\d+\/\d+\/\d+)\s*$/.exec(text || "");
+    if (!m) return null;
+    var t = m[1].toLowerCase(), hits = [];
+    Object.keys(DELL_LONG).forEach(function (k) {
+      if (t === k || (t.length >= 2 && DELL_LONG[k].indexOf(t) === 0)) hits.push(DELL_LONG[k]);
+    });
+    return hits.length === 1 ? hits[0] + m[2] : null;
+  }
+  var DELL = "dell_powerconnect";
+  var VNAME = { cisco_ios: "Cisco Catalyst", dell_powerconnect: "Dell PowerConnect" };
+  var EXAMPLE = { cisco_ios: "Gi2/0/14 or TenGigabitEthernet1/1/1", dell_powerconnect: "gi2/0/14 or te1/0/1" };
+  function targetName(text, vendor) { return vendor === DELL ? dellName(text) : longName(text); }
+  function cfgWord(vendor) { return vendor === DELL ? "configure" : "configure terminal"; }
+  function ifName(p) { return p.ifname || targetName(p.name, D.vendor) || p.name; }
+  function configText(p) {
+    var lines = ["interface " + ifName(p)].concat(p.config || []);
+    if (D.vendor === DELL) lines.push("exit");
+    return lines.join("\n");
+  }
+  // One port's block to paste on a `vendor` switch. Same brand: its own lines; other brand: rewritten.
+  function portBlock(p, name, vendor, wipe, comments) {
+    var c = (p.copy && p.copy[vendor]) || { lines: [], notes: [] }, out = [];
+    if (vendor !== DELL && comments) c.notes.forEach(function (n) { out.push("! " + n); });
+    if (vendor !== DELL && wipe) out.push("default interface " + name);
+    out.push("interface " + name);
+    out = out.concat(c.lines);
+    if (vendor === DELL) out.push("exit");       // a Dell needs 'exit' to leave each interface
+    return out;
+  }
+  function wrapScript(lines, vendor, wrap) {
+    return wrap ? [cfgWord(vendor)].concat(lines, ["end"]) : lines;
+  }
+  // The Wipe option ('default interface') only exists on a Cisco
+  function syncVendorOptions(scope, vendor) {
+    var wipe = scope.querySelector('input[id$="-clear"], input[id$="-wipe"]');
+    wipe.disabled = vendor === DELL;
+    if (vendor === DELL) wipe.checked = false;
+    var note = scope.querySelector(".wipe-note");
+    if (note) note.textContent = vendor === DELL ? "Cisco only: a Dell has no 'default interface'." :
+      (note.dataset.text || "");
+    scope.querySelector(".cfg-in").textContent = cfgWord(vendor);
+  }
 
   function copyText(text, msgEl, preEl) {
     function done(ok) {
@@ -976,28 +1042,33 @@
 
   function updateScript() {
     if (!current) return;               // panel closed (a late 'change' event from the box)
+    var vendor = document.getElementById("d-vendor").value;
     var input = document.getElementById("d-target"), msg = document.getElementById("d-target-msg");
-    var raw = input.value.trim(), target = longName(raw), p = current.p;
+    var raw = input.value.trim(), target = targetName(raw, vendor), p = current.p;
+    input.placeholder = vendor === DELL ? "gi2/0/14" : "Gi2/0/14";
     input.classList.toggle("bad", !!raw && !target);
+    syncVendorOptions(drawer, vendor);
     var targetItem = null;
-    all.forEach(function (i) { if (target && ifName(i.p) === target) targetItem = i; });
+    if (vendor === D.vendor) all.forEach(function (i) { if (target && targetName(i.p.name, vendor) === target) targetItem = i; });
     mark("target", targetItem);
     msg.hidden = true;
-    if (raw && !target) { msg.hidden = false; msg.textContent = "Type a port like Gi2/0/14 or TenGigabitEthernet1/1/1."; }
-    else if (target && target === ifName(p)) { msg.hidden = false; msg.textContent = "That's the same port you're copying from."; }
+    if (raw && !target) { msg.hidden = false; msg.textContent = "Type a port like " + EXAMPLE[vendor] + "."; }
+    else if (targetItem && targetItem.p === p) { msg.hidden = false; msg.textContent = "That's the same port you're copying from."; }
     else if (targetItem && targetItem.p.activity === "active") {
       msg.hidden = false;
       msg.textContent = "Heads up: " + targetItem.p.name + " is in use (" + vlanFull(targetItem.p.vlan) + ").";
     }
-    var name = target || "<new port>";
-    var lines = [];
-    if (document.getElementById("d-wrap").checked) lines.push("configure terminal");
-    if (document.getElementById("d-clear").checked) lines.push("default interface " + name);
-    lines.push("interface " + name);
-    lines = lines.concat(p.config || []);
-    if (document.getElementById("d-wrap").checked) lines.push("end");
+    var block = portBlock(p, target || "<new port>", vendor, document.getElementById("d-clear").checked, true);
+    var lines = wrapScript(block, vendor, document.getElementById("d-wrap").checked);
     document.getElementById("d-script").textContent = lines.join("\n");
     document.getElementById("d-copy-script").disabled = !target;
+    var notes = document.getElementById("d-notes");
+    notes.textContent = "";
+    if (vendor !== D.vendor) notes.appendChild(el("p", "muted", "Rewritten for a " + VNAME[vendor] +
+      ": only the settings both brands share are copied."));
+    if (p.basic) notes.appendChild(el("p", "warn-line", "Built from the description and VLAN only, since this " +
+      "port's config wasn't read."));
+    ((p.copy && p.copy[vendor] && p.copy[vendor].notes) || []).forEach(function (n) { notes.appendChild(el("p", "warn-line", n)); });
   }
 
   function openPanel(item) {
@@ -1039,8 +1110,7 @@
       row.appendChild(b); row.appendChild(msg);
       box.appendChild(row);
     }
-    document.getElementById("d-paste").hidden = !hasCfg;
-    if (hasCfg) updateScript();
+    updateScript();
     drawer.hidden = false;
     document.body.classList.add("drawer-open");
     drawCables();
@@ -1064,7 +1134,10 @@
     document.body.classList.remove("picking");
     document.getElementById("pick-banner").hidden = true;
     drawer.hidden = false;
-    if (item) document.getElementById("d-target").value = item.p.name;
+    if (item) {
+      document.getElementById("d-vendor").value = D.vendor;      // a port on this page is on this brand
+      document.getElementById("d-target").value = item.p.name;
+    }
     updateScript();
   }
 
@@ -1089,7 +1162,9 @@
   document.getElementById("d-close").addEventListener("click", closePanel);
   document.getElementById("d-pick").addEventListener("click", startPick);
   document.getElementById("pick-cancel").addEventListener("click", function () { endPick(null); });
-  ["d-target", "d-wrap", "d-clear"].forEach(function (id) {
+  document.getElementById("d-vendor").value = D.vendor;
+  drawer.querySelector(".wipe-note").dataset.text = drawer.querySelector(".wipe-note").textContent;
+  ["d-target", "d-wrap", "d-clear", "d-vendor"].forEach(function (id) {
     document.getElementById(id).addEventListener("input", updateScript);
     document.getElementById(id).addEventListener("change", updateScript);
   });
@@ -1108,12 +1183,16 @@
   var STORE = "pa.moves." + D.host;      // per stack, so redrawing it (to refresh configs) keeps the list
   var mvStart = document.getElementById("mv-start"), mvPer = document.getElementById("mv-per");
   var mvWrap = document.getElementById("mv-wrap"), mvWipe = document.getElementById("mv-wipe");
+  var mvVendor = document.getElementById("mv-vendor");
   var SHORT = {};
   Object.keys(LONG).forEach(function (k) { SHORT[LONG[k]] = k; });
 
+  var DELL_SHORT = { gigabitethernet: "gi", tengigabitethernet: "te", fastethernet: "fa" };
   function shortName(full) {
     var m = /^([A-Za-z-]+)(.*)$/.exec(full || "");
-    return m && SHORT[m[1]] ? SHORT[m[1]] + m[2] : (full || "");
+    if (m && SHORT[m[1]]) return SHORT[m[1]] + m[2];
+    if (m && DELL_SHORT[m[1].toLowerCase()]) return DELL_SHORT[m[1].toLowerCase()] + m[2];
+    return full || "";
   }
   function moveIndex(p) {
     for (var i = 0; i < moves.length; i++) if (moves[i].item.p === p) return i;
@@ -1121,7 +1200,7 @@
   }
   // "Gi1/0/1" -> {type: "GigabitEthernet", member: 1, slot: 0, port: 1}
   function parseStart() {
-    var full = longName(mvStart.value);
+    var full = targetName(mvStart.value, mvVendor.value);
     if (!full) return null;
     var m = /^([A-Za-z-]+)(\d+)\/(\d+)\/(\d+)$/.exec(full);
     if (m) return { type: m[1], member: +m[2], slot: +m[3], port: +m[4] };
@@ -1139,7 +1218,7 @@
   function targets() {
     var start = parseStart();
     var out = moves.map(function (mv, i) {
-      if (mv.target) { var n = longName(mv.target); return { name: n, auto: false, bad: !n }; }
+      if (mv.target) { var n = targetName(mv.target, mvVendor.value); return { name: n, auto: false, bad: !n }; }
       var a = autoTarget(start, i);
       return { name: a, auto: true, bad: !a };
     });
@@ -1148,22 +1227,14 @@
     out.forEach(function (t) { t.dup = !!t.name && seen[t.name] > 1; });
     return out;
   }
-  // The config to copy. Without a config read from the switch, rebuild the basics from what we know.
-  function portLines(p) {
-    if (p.config) return { lines: p.config, basic: false };
-    var lines = [];
-    if (p.desc) lines.push(" description " + p.desc);
-    if (/^\d+$/.test(p.vlan)) lines.push(" switchport mode access", " switchport access vlan " + p.vlan);
-    else lines.push(" ! " + vlanLong(p.vlan) + " port: its config wasn't read, set it up by hand");
-    return { lines: lines, basic: true };
-  }
+  function copyNotes(p) { return (p.copy && p.copy[mvVendor.value] && p.copy[mvVendor.value].notes) || []; }
   function hasLine(p, re) { return (p.config || []).some(function (l) { return re.test(l); }); }
 
   function saveMoves() {
     try {
       localStorage.setItem(STORE, JSON.stringify({
         moves: moves.map(function (mv) { return [mv.item.p.name, mv.target]; }),
-        start: mvStart.value, per: mvPer.value, wrap: mvWrap.checked, wipe: mvWipe.checked }));
+        start: mvStart.value, per: mvPer.value, wrap: mvWrap.checked, wipe: mvWipe.checked, vendor: mvVendor.value }));
     } catch (e) { /* private window or storage off: the list just won't survive a reload */ }
   }
   function loadMoves() {
@@ -1178,6 +1249,7 @@
       if (saved.per) mvPer.value = saved.per;
       mvWrap.checked = saved.wrap !== false;
       mvWipe.checked = !!saved.wipe;
+      if (VNAME[saved.vendor]) mvVendor.value = saved.vendor;
     } catch (e) { moves = []; }
   }
 
@@ -1213,7 +1285,8 @@
       tr.appendChild(el("td", "num", String(i + 1)));
       var from = el("td");
       from.appendChild(el("b", "mono", p.name));
-      if (!p.config) from.appendChild(el("span", "tag", "basic"));
+      if (p.basic) from.appendChild(el("span", "tag", "basic"));
+      if (copyNotes(p).length) from.appendChild(el("span", "tag", "check")).title = copyNotes(p).join("\n");
       tr.appendChild(from);
       tr.appendChild(el("td", null, vlanName(p.vlan) ? p.vlan + " " + vlanName(p.vlan) : vlanLong(p.vlan).replace("VLAN ", "")));
       tr.appendChild(el("td", "d", p.desc));
@@ -1226,7 +1299,7 @@
       inp.title = mv.target ? "You typed this. Clear it to go back to automatic numbering." : "Numbered automatically. Type to change it.";
       inp.addEventListener("change", function () {
         var v = inp.value.trim(), auto = autoTarget(start, i);
-        mv.target = (!v || (auto && longName(v) === auto)) ? "" : v;
+        mv.target = (!v || (auto && targetName(v, mvVendor.value) === auto)) ? "" : v;
         renderMoves();
       });
       td.appendChild(inp);
@@ -1263,7 +1336,15 @@
       var named = t.map(function (x) { return shortName(x.name); });
       note(moves.length + " port" + (moves.length === 1 ? "" : "s") + " → " + named[0] + (named.length > 1 ? " … " + named[named.length - 1] : "") + ".");
     }
-    var basic = moves.filter(function (mv) { return !mv.item.p.config; });
+    var vendor = mvVendor.value;
+    if (moves.length && vendor !== D.vendor) note("Rewritten for a " + VNAME[vendor] + ": only the settings both " +
+      "brands share are copied.");
+    var flagged = moves.filter(function (mv) { return copyNotes(mv.item.p).length; });
+    if (flagged.length) note(flagged.length + " port" + (flagged.length === 1 ? " has" : "s have") + " something that " +
+      "won't carry over (marked check; hover it): " + flagged.slice(0, 3).map(function (mv) {
+        return mv.item.p.name + ": " + copyNotes(mv.item.p).join("; ");
+      }).join(" · ") + (flagged.length > 3 ? " · and " + (flagged.length - 3) + " more (also in the CSV)." : ""), true);
+    var basic = moves.filter(function (mv) { return mv.item.p.basic; });
     if (basic.length) note(basic.length + " port" + (basic.length === 1 ? " has" : "s have") +
       " no config in this drawing, so only the description and VLAN are copied (marked basic)." +
       (D.has_config ? "" : " Draw the stack again with the enable password to copy full configs."), true);
@@ -1277,20 +1358,16 @@
   }
 
   function buildScript() {
-    var t = targets(), lines = [];
-    if (mvWrap.checked) lines.push("configure terminal");
-    lines.push("! Move list from " + D.hostname + " (" + D.host + "), drawn " + D.generated + ": " + moves.length + " ports");
+    var t = targets(), vendor = mvVendor.value, cisco = vendor !== DELL, lines = [];
+    // Comments ('!') only on a Cisco; a Dell may not take them
+    if (cisco) lines.push("! Move list from " + D.hostname + " (" + D.host + "), drawn " + D.generated + ": " + moves.length + " ports");
     moves.forEach(function (mv, i) {
-      var p = mv.item.p, body = portLines(p);
-      lines.push("!");
-      lines.push("! " + (i + 1) + ". from " + ifName(p) + (body.basic ? " (basic: description and VLAN only)" : ""));
-      if (mvWipe.checked) lines.push("default interface " + t[i].name);
-      lines.push("interface " + t[i].name);
-      lines = lines.concat(body.lines);
+      var p = mv.item.p;
+      if (cisco) lines.push("!", "! " + (i + 1) + ". from " + ifName(p) + (p.basic ? " (basic: description and VLAN only)" : ""));
+      lines = lines.concat(portBlock(p, t[i].name, vendor, mvWipe.checked, cisco));
     });
-    lines.push("!");
-    if (mvWrap.checked) lines.push("end");
-    return lines.join("\n");
+    if (cisco) lines.push("!");
+    return wrapScript(lines, vendor, mvWrap.checked).join("\n");
   }
   function csvCell(v) {
     v = String(v === undefined || v === null ? "" : v);
@@ -1365,6 +1442,14 @@
     });
     document.getElementById("mv-sort-port").addEventListener("click", function () { sortMoves(false); });
     document.getElementById("mv-sort-vlan").addEventListener("click", function () { sortMoves(true); });
+    mvVendor.value = D.vendor;
+    mvVendor.addEventListener("change", function () {
+      // keep the start port, written the new brand's way
+      var start = targetName(mvStart.value, mvVendor.value);
+      if (start) mvStart.value = shortName(start);
+      syncVendorOptions(dock, mvVendor.value);
+      renderMoves();
+    });
     [mvStart, mvPer, mvWrap, mvWipe].forEach(function (x) { x.addEventListener("change", renderMoves); });
     mvStart.addEventListener("input", function () { renderMoveNotes(targets(), parseStart()); });
     document.getElementById("mv-copy").addEventListener("click", function () {
@@ -1375,16 +1460,19 @@
     });
     document.getElementById("mv-csv").addEventListener("click", function () {
       var t = targets();
-      var lines = [["#", "Old switch", "Old port", "Old interface", "New port", "VLAN", "VLAN name", "Description", "Result"].join(",")];
+      var lines = [["#", "Old switch", "Old port", "Old interface", "New port", "VLAN", "VLAN name", "Description", "Result",
+                    "Not carried over"].join(",")];
       moves.forEach(function (mv, i) {
         var p = mv.item.p;
         lines.push([i + 1, mv.item.m.number, p.name, ifName(p), shortName(t[i].name), p.vlan, vlanName(p.vlan), p.desc,
-                    LABEL[p.activity]].map(csvCell).join(","));
+                    LABEL[p.activity], copyNotes(p).join("; ")].map(csvCell).join(","));
       });
       download(D.hostname + "-move-list.csv", lines.join("\r\n"), "text/csv");
     });
     document.getElementById("mv-print").addEventListener("click", printMoves);
+    if (D.vendor === DELL) mvStart.value = "gi1/0/1";
     loadMoves();
+    syncVendorOptions(dock, mvVendor.value);
     renderMoves();
   }
 

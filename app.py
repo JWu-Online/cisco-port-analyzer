@@ -315,12 +315,13 @@ def topology_run():
     settings = load_settings()
     protocol = sw.clean_protocol(payload.get("protocol") or (saved or {}).get("protocol")
                                  or settings["default_protocol"])
+    vendor = (saved or {}).get("type") or sw.clean_type(payload.get("type") or "cisco_ios")
     problems = []
     if not address:
         problems.append("Pick a stack, or type its address.")
-    elif saved and saved["type"] != "cisco_ios":
-        problems.append(f"{address} is a {sw.TYPES.get(saved['type'], saved['type'])}. "
-                        "Only Cisco Catalyst stacks can be drawn.")
+    elif vendor not in topology.VENDORS:
+        problems.append(f"{address} is a {sw.TYPES.get(vendor, vendor)}. Only Cisco Catalyst and "
+                        "Dell PowerConnect stacks can be drawn.")
     if not protocol:
         problems.append("Connection must be SSH or Telnet.")
     try:
@@ -336,7 +337,8 @@ def topology_run():
     where = ", ".join(x for x in ((saved or {}).get("building"), (saved or {}).get("location")) if x)
     try:
         data, _, path = topology.run_topology(address, protocol, login, months, int(settings["timeout"]),
-                                              TOPOLOGY_DIR, where=where, progress=lambda msg: None)
+                                              TOPOLOGY_DIR, where=where, progress=lambda msg: None,
+                                              vendor=vendor)
     except Exception as exc:
         return jsonify({"ok": False, "problems": [f"Couldn't read {address}: {sw.friendly_error(exc)}"]}), 502
     return jsonify({"ok": True, "url": f"/topology/page/{path.name}", "summary": data["summary"]})
@@ -353,7 +355,8 @@ def topology_page(name):
 
 @app.get("/topology/demo")
 def topology_demo():
-    _, html, _ = topology.run_demo(save=False)
+    vendor = "dell_powerconnect" if request.args.get("type", "").lower().startswith("dell") else "cisco_ios"
+    _, html, _ = topology.run_demo(save=False, vendor=vendor)
     return html
 
 
