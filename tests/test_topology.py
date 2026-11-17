@@ -313,6 +313,75 @@ gi1/0/3  1G-Copper      --      --     --     --  Down           --     --
     return ok
 
 
+def chassis():
+    ok = True
+    print("\nChassis (Catalyst 4507) and fixed switches with two-number port names")
+    status = ["Port      Name               Status       Vlan       Duplex  Speed Type",
+              "Te1/1     UPLINK-CORE        connected    trunk        full    10G 10GBase-SR",
+              "Te1/2                        notconnect   1            full    10G 10GBase-SR",
+              "Gi1/3                        notconnect   1            full   1000 No Gbic"]
+    intf = []
+    for slot in (2, 3):
+        for port in range(1, 49):
+            up = (port % 3) != 0
+            status.append(f"Gi{slot}/{port:<7}{'B127 Desk ' + str(port) if up else '':<19}"
+                          f"{'connected' if up else 'notconnect':<13}{'20' if slot == 2 else '30':<11}"
+                          f"{'a-full' if up else 'auto':>6} {'a-1000' if up else 'auto':>6} 10/100/1000-TX")
+            intf += [f"GigabitEthernet{slot}/{port} is {'up' if up else 'down'}, line protocol is "
+                     f"{'up (connected)' if up else 'down (notconnect)'}",
+                     f"  Last input never, output {'00:00:01' if up else 'never'}, output hang never"]
+    outputs = {
+        "switch": "", "neighbors": "", "stack_ports": "", "link": "",
+        "version": "Cisco IOS Software, IOS-XE Software, Catalyst 4500 L3 Switch Software\n"
+                   "B127_4507 uptime is 2 years, 14 weeks, 3 days, 2 hours, 11 minutes\n"
+                   "cisco WS-C4507R+E (MPC8572) processor (revision 10) with 2097152K/20480K bytes of memory.",
+        "modules": """Chassis Type : WS-C4507R+E
+
+Power consumed by backplane : 40 Watts
+
+Mod Ports Card Type                              Model              Serial No.
+---+-----+--------------------------------------+------------------+-----------
+ 1     6  Sup 7-E 10GE (SFP+), 1000BaseX (SFP)   WS-X45-SUP7-E      CAT1111111
+ 2    48  10/100/1000BaseT Premium POE E Series  WS-X4748-RJ45V+E   CAT2222222
+ 3    48  10/100/1000BaseT Premium POE E Series  WS-X4748-RJ45V+E   CAT3333333
+
+ M MAC addresses                    Hw  Fw           Sw               Status
+--+--------------------------------+---+------------+----------------+---------
+ 1 0021.d8fd.3a00 to 0021.d8fd.3a05 1.2 15.0(1r)SG10 03.06.08.E        Ok
+""",
+        "status": "\n".join(status), "interfaces": "\n".join(intf),
+        "config": "interface GigabitEthernet2/1\n description B127 Desk 1\n switchport access vlan 20\n!\n",
+    }
+    data, _ = T.build_stack(outputs, "10.0.4.45", 6, now=NOW)
+    ok &= check("4507: drawn by slot, not empty", data["unit"] == "Slot" and [m["number"] for m in data["members"]] == [1, 2, 3],
+                [(m["number"], m["port_count"]) for m in data["members"]])
+    m2 = data["members"][1]
+    ok &= check("4507: line cards get 48 ports and their model; the supervisor its few",
+                m2["port_count"] == 48 and m2["model"] == "WS-X4748-RJ45V+E" and data["members"][0]["port_count"] == 8
+                and data["model"] == "WS-C4507R+E", (m2["port_count"], m2["model"], data["members"][0]["port_count"]))
+    ports = {p["name"]: p for m in data["members"] for p in m["ports"] if not p.get("absent")}
+    ok &= check("4507: ports read and decided", ports["Gi2/1"]["activity"] == "active" and ports["Gi2/3"]["activity"] == "inactive"
+                and ports["Gi3/2"]["vlan"] == "30" and ports["Gi2/1"]["config"] == [" description B127 Desk 1", " switchport access vlan 20"],
+                (ports["Gi2/3"]["activity"], ports["Gi2/3"]["why"]))
+    ok &= check("4507: no 'single switch' warning", not any("single switch" in w for w in data["warnings"]), data["warnings"])
+    html = T.render_html(data)
+    ok &= check("4507 page says slots", "3 slots" in html and "WS-C4507R+E" in html)
+
+    one = "\n".join(["Port      Name               Status       Vlan       Duplex  Speed Type"] +
+                     [f"Gi1/{i:<8}                   connected    10         a-full a-1000 10/100/1000BaseT" for i in range(1, 49)] +
+                     ["Te1/49                       notconnect   1            full    10G Not Present"])
+    d, _ = T.build_stack({"status": one, "version": "LAB-4948 uptime is 1 year, 2 weeks"}, "x", 6, now=NOW)
+    ok &= check("4948 (one slot, Gi1/1-48): a single switch with 48 ports",
+                d["unit"] == "Switch" and len(d["members"]) == 1 and d["members"][0]["port_count"] == 48)
+    try:
+        T.build_stack({"status": "Port      Name   Status       Vlan\n" + "\n".join(
+            f"Te1/1/{i}           connected    trunk  full 10G SFP-10GBase-SR" for i in range(1, 5))}, "x", 6, now=NOW)
+        ok &= check("unknown port names -> a clear error, not an empty page", False)
+    except ValueError as exc:
+        ok &= check("unknown port names -> a clear error, not an empty page", "couldn't place" in str(exc), str(exc))
+    return ok
+
+
 def json_copy(x):
     import json
     return json.loads(json.dumps(x))
@@ -329,7 +398,7 @@ def end_to_end():
             cmds[cmd[-1]] = ("Building configuration...\n!\nhostname DEMO-IDF-E3\n"
                              "username netops privilege 15 secret 9 $9$FAKE-SECRET-HASH\n!\n" + demo[key] +
                              "\nsnmp-server community FAKE-COMMUNITY RO\nend\n")
-        else:
+        elif key in demo:          # commands the demo has no output for get "% Invalid input", like a real switch
             cmds[cmd] = demo[key]
     cli = MockCLI("DEMO-IDF-E3", cmds, start_enabled=False, enable_secret="en-secret")
     stack = TelnetSwitch(cli, "netops", "sw-pass")
@@ -394,6 +463,9 @@ def end_to_end():
                 and client.get("/topology/page/nothing.html", **base).status_code == 404)
     ok &= check("non-JSON posts refused", client.post("/api/topology", data={"address": addr}, **base).status_code == 415)
     ok &= check("demo page loads", client.get("/topology/demo", **base).status_code == 200)
+    debug = list((Path(webapp.DATA_DIR) / "debug").glob("*-topology-*.txt"))
+    ok &= check("what each switch printed is kept in data/debug, for troubleshooting",
+                len(debug) >= 2 and "===== status =====" in debug[0].read_text(encoding="utf-8"), debug)
     saved = "".join(p.read_text(encoding="utf-8", errors="ignore")
                     for p in Path(webapp.DATA_DIR).rglob("*") if p.is_file())
     ok &= check("no password written to disk",
@@ -407,6 +479,7 @@ def end_to_end():
 def main():
     ok = parsers()
     ok &= dell_and_translation()
+    ok &= chassis()
     ok &= end_to_end()
     print("\nALL PASSED" if ok else "\nSOME CHECKS FAILED")
     return 0 if ok else 1

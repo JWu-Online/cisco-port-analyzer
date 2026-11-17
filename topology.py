@@ -63,6 +63,7 @@ COMMANDS = {
     # Only the interface sections if the switch can filter; older IOS sends the whole config
     "config": ("show running-config | section ^interface", "show running-config"),
     "link": "show interfaces link",
+    "modules": "show module",
     "interfaces": "show interfaces",
 }
 DELL_COMMANDS = {
@@ -103,7 +104,12 @@ def normalize_intf(name):
 
 
 def port_position(short_name):
-    """(type, member, slot, port) or None.  Gi2/0/14 -> ('Gi', 2, 0, 14); Fa0/7 -> ('Fa', 1, 0, 7)."""
+    """(type, member, slot, port) or None.
+
+    Gi2/0/14 -> ('Gi', 2, 0, 14)   stack member 2
+    Fa0/7    -> ('Fa', 1, 0, 7)    standalone switch, member 1
+    Gi3/14   -> ('Gi', 3, 0, 14)   chassis (4500, 4948): line card in slot 3 is drawn like a member
+    """
     m = _NAME_RE.match(short_name)
     if not m:
         return None
@@ -112,8 +118,24 @@ def port_position(short_name):
     if len(parts) == 3:
         member, slot, port = parts
     else:
-        member, (slot, port) = 1, parts       # standalone switch: Fa0/7 is member 1
+        first, port = parts
+        member, slot = (first or 1), 0
     return prefix, member, slot, port
+
+
+def is_chassis(names):
+    """True for a chassis like a 4507: two-number port names on more than one slot (Gi2/1, Gi3/1)."""
+    slots = set()
+    for name in names:
+        m = _NAME_RE.match(name)
+        if not m:
+            continue
+        nums = m.group(2).split("/")
+        if len(nums) == 3:
+            return False
+        if nums[0] != "0":
+            slots.add(nums[0])
+    return len(slots) > 1
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +237,17 @@ def parse_version(output):
         if model:
             entry.setdefault("model", model.group(1))
     return info
+
+
+def parse_modules(output):
+    """'show module' on a chassis (4500) -> {slot: {"ports", "card", "model"}}, plus the chassis model."""
+    mods = {}
+    chassis = re.search(r"(?im)^\s*Chassis Type\s*:\s*(\S+)", output or "")
+    for line in (output or "").splitlines():
+        m = re.match(r"^\s*(\d{1,2})\s+(\d{1,3})\s+(.+?)\s{2,}(\S+)\s+\S+\s*$", line)
+        if m and int(m.group(1)) not in mods:
+            mods[int(m.group(1))] = {"ports": int(m.group(2)), "card": m.group(3).strip(), "model": m.group(4)}
+    return mods, (chassis.group(1) if chassis else "")
 
 
 _STATUS_WORDS = {"connected", "notconnect", "disabled", "err-disabled", "err-disable", "inactive",
@@ -601,6 +634,15 @@ def _front_panel(names):
     return chosen
 
 
+def no_ports_message(names):
+    """Say what was read when none of it could be put on a front panel."""
+    sample = sorted((n for n in names if _NAME_RE.match(n)), key=analyzer.port_key)
+    seen = f" ({', '.join(sample[:6])}{', ...' if len(sample) > 6 else ''})" if sample else ""
+    return (f"Read {len(names)} ports{seen}, but couldn't place any of them as front-panel ports 1-48. "
+            f"This switch names its ports in a way the topology page doesn't know yet. What it printed is "
+            f"saved in the data\\debug folder; send that file to whoever maintains the app.")
+
+
 def _touch_history(history, now):
     if not history.get("first_run"):
         history["first_run"] = now.isoformat(timespec="seconds")
@@ -640,8 +682,12 @@ def build_stack(outputs, host, months=6, history=None, now=None, where="", vendo
                         "used. Results rely on Last input/output and earlier runs.")
 
     chosen = _front_panel(set(status) | set(intfs))
-    member_numbers = sorted(set(chosen) | set(switch_rows))
-    if not switch_rows:
+    chassis = is_chassis(set(status) | set(intfs))
+    if not chosen:
+        raise ValueError(no_ports_message(set(status) | set(intfs)))
+    modules, chassis_model = parse_modules(outputs.get("modules")) if chassis else ({}, "")
+    member_numbers = sorted(set(chosen) | (set() if chassis else set(switch_rows)))
+    if not switch_rows and not chassis and len(member_numbers) == 1:
         warnings.append("'show switch' returned nothing, so this is drawn as a single switch.")
     port_history = _touch_history(history, now)
 
@@ -649,13 +695,17 @@ def build_stack(outputs, host, months=6, history=None, now=None, where="", vendo
     totals = {"active": 0, "inactive": 0, "unsure": 0, "up_now": 0, "total": 0}
     vlan_counts = {}
     for num in member_numbers:
-        row = switch_rows.get(num, {})
-        vinfo = version["members"].get(num, {})
+        row = {} if chassis else switch_rows.get(num, {})
+        vinfo = dict(version["members"].get(num, {})) if not chassis else {}
+        if chassis and num in modules:
+            vinfo["model"] = modules[num]["model"]
         uptime = vinfo.get("uptime") or version["uptime"]
         uptime_text = vinfo.get("uptime_text") or version["uptime_text"]
         covered_since = update_coverage(history, num, now, uptime)
         names = chosen.get(num, {})
         size = _port_count(max(names) if names else LAST_PORT, vinfo.get("model", ""))
+        if chassis and num in modules:
+            size = _port_count(max([min(modules[num]["ports"], LAST_PORT)] + list(names)))
         counts = {"active": 0, "inactive": 0, "unsure": 0, "up_now": 0}
         ports_out = []
 
@@ -704,7 +754,8 @@ def build_stack(outputs, host, months=6, history=None, now=None, where="", vendo
         sp, nb = stack_ports.get(num, ("", "")), neighbors.get(num, ("", ""))
         members_out.append({
             "number": num,
-            "role": row.get("role", "" if switch_rows else "Standalone"),
+            "card": modules.get(num, {}).get("card", ""),
+            "role": "" if chassis else row.get("role", "" if switch_rows else "Standalone"),
             "state": row.get("state", ""),
             "model": vinfo.get("model", ""),
             "uptime": ", ".join(uptime_text.split(", ")[:2]) if uptime_text else "",
@@ -726,6 +777,8 @@ def build_stack(outputs, host, months=6, history=None, now=None, where="", vendo
 
     data = {
         "host": host, "where": where, "vendor": "cisco_ios", "vendor_name": VENDORS["cisco_ios"],
+        "unit": "Slot" if chassis else "Switch", "units": "slots" if chassis else "members",
+        "model": chassis_model,
         "hostname": version["hostname"] or outputs.get("prompt", "") or host,
         "generated": now.strftime("%Y-%m-%d %H:%M"),
         "months": months, "summary": totals, "warnings": warnings,
@@ -896,6 +949,8 @@ def build_dell_stack(outputs, host, months=6, history=None, now=None, where=""):
 
     if not ports_by:
         raise ValueError("Read the switch, but no ports could be read. Is it a Dell PowerConnect 5500?")
+    if not _front_panel(ports_by):
+        raise ValueError(no_ports_message(ports_by))
     if not outputs.get("counters"):
         warnings.append("This switch didn't answer 'show interfaces counters', so only ports that are up "
                         "now can be called Active.")
@@ -996,6 +1051,7 @@ def build_dell_stack(outputs, host, months=6, history=None, now=None, where=""):
 
     data = {
         "host": host, "where": where, "vendor": "dell_powerconnect", "vendor_name": VENDORS["dell_powerconnect"],
+        "unit": "Switch", "units": "members", "model": "",
         "hostname": system["hostname"] or outputs.get("prompt", "") or host,
         "generated": now.strftime("%Y-%m-%d %H:%M"),
         "months": months, "summary": summary, "warnings": warnings,
@@ -1085,12 +1141,34 @@ def list_pages(data_dir, limit=15):
     return out
 
 
+def save_debug(debug_dir, address, vendor, outputs):
+    """Keep what the switch printed, so a layout the page doesn't understand can be fixed.
+
+    The running-config is cut down to the port sections, with keys and passwords
+    already removed, like the page itself.
+    """
+    debug_dir = Path(debug_dir)
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    path = debug_dir / f"{re.sub(r'[^\w.-]', '_', address)}-topology-{vendor}.txt"
+    with open(path, "w", encoding="utf-8") as f:
+        for key, text in outputs.items():
+            if key == "config":
+                text = "\n".join(f"interface {c['ifname']}\n" + "\n".join(c["lines"])
+                                 for c in parse_interface_configs(text).values())
+            f.write(f"===== {key} =====\n{text}\n\n")
+    return path
+
+
 def run_topology(address, protocol, login, months=6, timeout=20, data_dir=None, where="", progress=print,
                  vendor="cisco_ios"):
     """Read the stack, decide each port, remember what we saw, save the page.
     Returns (data, html, saved_path)."""
     data_dir = Path(data_dir or DEFAULT_DIR)
     outputs = collect_outputs(address, protocol, login, timeout, progress, vendor)
+    try:
+        save_debug(data_dir.parent / "debug", address, vendor, outputs)
+    except OSError:
+        pass                                # a full or read-only disk shouldn't stop the drawing
     data, history = build_stack(outputs, address, months, load_history(data_dir, address), where=where,
                                 vendor=vendor)
     save_history(data_dir, address, history)
