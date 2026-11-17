@@ -11,7 +11,7 @@
   <header class="topbar">
     <a class="link" href="/">&larr; Port Analyzer</a>
     <h1>Stack topology</h1>
-    <p>Draw one Cisco stack: every member's ports 1&ndash;48, the VLAN on each port, and whether it's been used.</p>
+    <p>Draw one Cisco Catalyst or Dell PowerConnect stack: every member's ports 1&ndash;48, the VLAN on each port, and whether it's been used.</p>
   </header>
 
   <main>
@@ -24,11 +24,15 @@
           <label class="field"><span>Connect with</span>
             <select id="protocol"><option value="telnet">Telnet</option><option value="ssh">SSH</option></select>
           </label>
+          <label class="field"><span>Switch type</span>
+            <select id="type"><option value="cisco_ios">Cisco Catalyst</option><option value="dell_powerconnect">Dell PowerConnect 5500</option></select>
+          </label>
         </div>
         <label class="field"><span>Unused for at least</span>
           <span class="months"><input id="months" type="number" min="0.5" max="120" step="0.5" aria-label="Months"> months</span>
         </label>
-        <p class="hint">Only Cisco Catalyst switches and stacks can be drawn. <a class="link" href="/topology/demo">See a made-up example</a></p>
+        <p class="hint">Cisco Catalyst and Dell PowerConnect 5500 switches and stacks can be drawn. Made-up examples:
+          <a class="link" href="/topology/demo">Cisco</a> · <a class="link" href="/topology/demo?type=dell">Dell</a></p>
       </section>
 
       <section class="panel" aria-labelledby="loginTitle">
@@ -94,13 +98,15 @@
 
     async function init() {
       var state = (await api("/api/state")).data;
-      var cisco = (state.switches || []).filter(function (s) { return s.type === "cisco_ios"; });
+      var KIND = { cisco_ios: "Cisco", dell_powerconnect: "Dell" };
+      var cisco = (state.switches || []).filter(function (s) { return KIND[s.type]; });
       var sel = $("#stack");
       cisco.sort(function (a, b) {
         return (a.building + a.location + a.address).localeCompare(b.building + b.location + b.address, undefined, { numeric: true });
       }).forEach(function (s) {
         var where = [s.building, s.location].filter(Boolean).join(", ");
-        sel.appendChild(el("option", { value: s.address }, where ? where + " (" + s.address + ")" : s.address));
+        sel.appendChild(el("option", { value: s.address },
+          (where ? where + " (" + s.address + ")" : s.address) + " · " + KIND[s.type]));
       });
       sel.appendChild(el("option", { value: "__other" }, "Another address…"));
       var last = recall("topologyStack");
@@ -127,7 +133,7 @@
         months: $("#months").value,
         username: $("#user").value, password: $("#pass").value, secret: $("#secret").value
       };
-      if (other) body.protocol = $("#protocol").value;
+      if (other) { body.protocol = $("#protocol").value; body.type = $("#type").value; }
       remember("user", $("#user").value);
       remember("topologyStack", $("#stack").value);
       notice("", []);

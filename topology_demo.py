@@ -253,3 +253,126 @@ def demo_outputs():
         "link": "\n".join(link),
         "interfaces": "\n".join(intf),
     }
+
+
+# ---------------------------------------------------------------------------
+# A made-up Dell PowerConnect 5500 stack: unit 1 is a 5548P, unit 2 a 5524P.
+# Up 412 days, so ports with no traffic since it started are Inactive, ports that
+# had traffic but are down now are Unsure (a Dell doesn't record when).
+# ---------------------------------------------------------------------------
+DELL_UNITS = [(1, "5548P", 48), (2, "5524P", 24)]
+DELL_VLAN_NAMES = {"1": "1", "20": "STAFF-DATA", "30": "STUDENT-LAB", "50": "PRINTERS", "60": "WIFI-AP",
+                   "99": "NET-MGMT", "40": "VOICE-PHONES"}
+
+
+def _ranges(ports):
+    """['gi1/0/1', 'gi1/0/2', 'gi1/0/3', 'gi1/0/7'] -> 'gi1/0/1-3,gi1/0/7' (how a Dell prints lists)."""
+    out, run = [], []
+    for p in ports + [None]:
+        if p and run and p.rsplit("/", 1)[0] == run[-1].rsplit("/", 1)[0] \
+                and int(p.rsplit("/", 1)[1]) == int(run[-1].rsplit("/", 1)[1]) + 1:
+            run.append(p)
+            continue
+        if run:
+            out.append(run[0] if len(run) == 1 else f"{run[0]}-{run[-1].rsplit('/', 1)[1]}")
+        run = [p] if p else []
+    return ",".join(out)
+
+
+def dell_demo_outputs():
+    rng = random.Random(11)
+    status = ["", "                                             Flow Link          Back   Mdix",
+              "Port     Type         Duplex  Speed Neg      ctrl State       Pressure Mode",
+              "-------- ------------ ------  ----- -------- ---- ----------- -------- -------"]
+    desc = ["", "Port      Description", "-------  -----------"]
+    cin = ["", "    Port      InUcastPkts  InMcastPkts  InBcastPkts    InOctets",
+           "---------- ------------ ------------ ------------ ------------"]
+    cout = ["", "    Port      OutUcastPkts OutMcastPkts OutBcastPkts   OutOctets",
+            "---------- ------------ ------------ ------------ ------------"]
+    run = ["config-file-header", "DEMO-B2-DELL", "v4.1.0.14 / R1.0.2", "@", "voice vlan id 40",
+           "username admin password encrypted FAKE0123456789abcdef privilege 15",
+           "snmp-server community FAKE-COMMUNITY ro view Default"]
+    for v, n in DELL_VLAN_NAMES.items():
+        if v != "1":
+            run += [f"interface vlan {v}", f"name {n}", "exit"]
+    untagged, tagged = {}, {}
+
+    for unit, _, count in DELL_UNITS:
+        for port in list(range(1, count + 1)) + ["te1", "te2"]:
+            name = f"gi{unit}/0/{port}" if isinstance(port, int) else f"te{unit}/0/{port[2:]}"
+            uplink = not isinstance(port, int)
+            roll = rng.random()
+            kind = "uplink" if uplink else ("up" if roll < 0.5 else "used" if roll < 0.68 else
+                                             "shut" if roll < 0.73 else "never")
+            vlan = "trunk" if uplink or (rng.random() < 0.06) else rng.choice(
+                ["20"] * 5 + ["30"] * 4 + ["50", "60", "99", "1", "1"])
+            up = kind in ("up", "uplink")
+            speed = "10000" if uplink else "1000"
+            ptype = "10G-Fiber" if uplink else "1G-Copper"
+            status.append(f"{name:<8} {ptype:<12} {'Full' if up else '  --':<6}  {speed if up else '  --':<5} "
+                          f"{'Enabled ' if up else '   --   '} {'Off' if up else ' --'}  {'Up' if up else 'Down':<11} "
+                          f"{'Disabled' if up else '   --   '} {'On' if up else '--'}")
+            label = "" if rng.random() < 0.15 else (
+                "UPLINK-CORE" if uplink else {"20": f"Rm B-{200 + port // 4} Desk {port % 4 + 1}",
+                                              "30": f"Lab B-{210 + port // 8} PC{port:02d}",
+                                              "50": f"Printer B-{200 + port // 6}", "60": f"AP-B{unit}-{port:02d}",
+                                              "99": "Mgmt", "1": "", "trunk": f"AP-B{unit}-{port:02d}"}.get(vlan, ""))
+            desc.append(f"{name:<9} {label}")
+            packets = 0 if kind in ("never", "shut") else rng.randint(2000, 9_000_000)
+            cin.append(f"  {name:<9} {packets:>12} {packets // 50:>12} {packets // 80:>12} {packets * 600:>12}")
+            cout.append(f"  {name:<9} {packets // 2:>12} {packets // 40:>12} {packets // 90:>12} {packets * 400:>12}")
+
+            lines = []
+            if label:
+                lines.append(f'description "{label}"' if " " in label else f"description {label}")
+            if vlan == "trunk":
+                lines += ["switchport mode trunk", "switchport trunk allowed vlan add 20,60,99"]
+                for v in ("20", "60", "99"):
+                    tagged.setdefault(v, []).append(name)
+            elif vlan != "1":
+                lines.append(f"switchport access vlan {vlan}")
+                untagged.setdefault(vlan, []).append(name)
+                if vlan == "20":
+                    lines.append("voice vlan enable")
+            else:
+                untagged.setdefault("1", []).append(name)
+            if not uplink and vlan != "trunk" and rng.random() < 0.7:
+                lines.append("spanning-tree portfast")
+            if kind == "shut":
+                lines.append("shutdown")
+            if lines:                         # a Dell only lists ports that have something set
+                run += [f"interface {'gigabitethernet' if not uplink else 'tengigabitethernet'}{name[2:]}"] + lines + ["exit"]
+    status += ["", "                                          Flow    Admin Back   Mdix",
+               "Ch       Type    Duplex  Speed  Neg      control  State Pressure Mode",
+               "-------- ------- ------  -----  -------- -------  ----- -------- ----",
+               "Po1         --     --      --      --       --    Down     --     --"]
+
+    vlan = ["", "Created by: D-Default, S-Static, G-GVRP, R-Radius Assigned VLAN, V-Voice VLAN", "",
+            "Vlan       Name           Tagged Ports      UnTagged Ports      Created by",
+            "---- ----------------- ------------------ ------------------ ----------------"]
+    for v, n in DELL_VLAN_NAMES.items():
+        t = _ranges(tagged.get(v, [])).split(",") if tagged.get(v) else [""]
+        u = _ranges(untagged.get(v, [])).split(",") if untagged.get(v) else [""]
+        for i in range(max(len(t), len(u))):        # long lists wrap onto more lines
+            tv = t[i] if i < len(t) else ""
+            uv = u[i] if i < len(u) else ""
+            first = i == 0
+            # same columns as the header: Vlan 0, Name 11, Tagged 26, UnTagged 44, Created by 64
+            vlan.append(f"{(' ' + v) if first else '':<11}{(n if first else ''):<15}{tv:<18}{uv:<20}"
+                        f"{('S' if v != '1' else 'DV') if first else ''}")
+    system = "\n".join([
+        "", "System Description:                       PowerConnect 5548P",
+        "System Up Time (days,hour:min:sec):       412,03:24:11", "System Contact:",
+        "System Name:                              DEMO-B2-DELL", "System Location:                          B Building",
+        "", "Unit    Type", "----    ----------------------",
+        " 1      PowerConnect 5548P", " 2      PowerConnect 5524P"])
+    stack = "\n".join([
+        "", "Unit   MAC Address         Software   Master    Uplink   Downlink   Status",
+        "----   -----------------   --------   -------   ------   --------   ------",
+        " 1     f8:b1:56:10:20:30   4.1.0.14   Enabled     2         2       master",
+        " 2     f8:b1:56:10:20:40   4.1.0.14   Enabled     1         1       backup"])
+    return {
+        "prompt": "DEMO-B2-DELL#", "system": system, "stack": stack,
+        "status": "\n".join(status), "description": "\n".join(desc),
+        "counters": "\n".join(cin + [""] + cout), "vlans": "\n".join(vlan), "config": "\n".join(run),
+    }

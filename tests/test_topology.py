@@ -20,7 +20,8 @@ os.environ.setdefault("PA_DATA_DIR", tempfile.mkdtemp(prefix="pa-topo-test-"))
 
 from mock_switch import MockCLI, TelnetSwitch  # noqa: E402
 import topology as T  # noqa: E402
-from topology_demo import demo_outputs  # noqa: E402
+from topology_demo import demo_outputs, dell_demo_outputs  # noqa: E402
+import samples as S  # noqa: E402
 import app as webapp  # noqa: E402
 
 NOW = datetime(2026, 11, 16, 9, 0)
@@ -212,6 +213,111 @@ end
     return ok
 
 
+def dell_and_translation():
+    ok = True
+    print("\nDell PowerConnect 5500")
+    names, untagged, tagged = T.parse_dell_vlans(S.DELL_VLAN)
+    ok &= check("show vlan: names and untagged ports (repo sample)",
+                names == {"131": "Staff"} and untagged.get("Gi1/0/2") == {"131"} and untagged.get("Gi1/0/30") == {"1"}
+                and not tagged, (names, untagged.get("Gi1/0/2"), tagged))
+    shifted = "\n".join(ln if not ln.strip()[:1].isdigit() else "  " + ln for ln in S.DELL_VLAN.splitlines())
+    ok &= check("show vlan: still read when the columns don't line up",
+                T.parse_dell_vlans(shifted)[1].get("Gi1/0/2") == {"131"})
+    totals = T.dell_packet_totals(S.DELL_COUNTERS)
+    ok &= check("show interfaces counters: packets only, not bytes",
+                totals["Gi1/0/1"] == 120931 + 2310 + 5512 + 100231 + 9123 + 12312 and totals["Gi1/0/2"] == 0, totals)
+    system = T.parse_dell_system(S.DELL_SYSTEM)
+    ok &= check("show system: name, uptime, model", system["hostname"] == "B218-5548P"
+                and abs(system["uptime"].days - 412) <= 1 and system["model"] == "PowerConnect 5548P", system)
+    cfg = T.parse_interface_configs("""config-file-header
+voice vlan id 40
+username admin password encrypted FAKEHASH privilege 15
+interface vlan 20
+name STAFF
+exit
+interface gigabitethernet1/0/1
+description "Rm 101 Desk"
+switchport access vlan 20
+voice vlan enable
+exit
+interface range gigabitethernet1/0/2-4
+spanning-tree portfast
+exit
+interface gigabitethernet1/0/5
+switchport mode general
+switchport general pvid 60
+switchport general allowed vlan add 60 untagged
+switchport general allowed vlan add 99 tagged
+power inline never
+exit
+snmp-server community FAKECOMM ro
+""")
+    ok &= check("Dell running-config: 'exit' blocks, ranges, nothing outside the ports",
+                set(cfg) == {"Gi1/0/1", "Gi1/0/2", "Gi1/0/3", "Gi1/0/4", "Gi1/0/5"}
+                and cfg["Gi1/0/3"]["lines"] == ["spanning-tree portfast"] and "FAKE" not in str(cfg), cfg)
+    prof = T.parse_profile(cfg["Gi1/0/1"]["lines"], voice_id="40")
+    lines, notes = T.render_profile(prof, "cisco_ios")
+    ok &= check("Dell -> Cisco: description unquoted, voice VLAN from the switch-wide id",
+                lines == [" description Rm 101 Desk", " switchport mode access", " switchport access vlan 20",
+                          " switchport voice vlan 40"] and not notes, (lines, notes))
+    lines, notes = T.render_profile(T.parse_profile(cfg["Gi1/0/5"]["lines"]), "cisco_ios")
+    ok &= check("Dell general mode -> Cisco trunk, with notes for it and the PoE line",
+                " switchport mode trunk" in lines and " switchport trunk native vlan 60" in lines
+                and " switchport trunk allowed vlan 60,99" in lines
+                and any("general" in n for n in notes) and any("power inline never" in n for n in notes), (lines, notes))
+    cisco = [" description " + "x" * 70, " switchport access vlan 30", " switchport mode access",
+             " switchport voice vlan 40", " spanning-tree portfast edge", " power inline never"]
+    lines, notes = T.render_profile(T.parse_profile(cisco), "dell_powerconnect")
+    ok &= check("Cisco -> Dell: no indent, 64-character description, voice VLAN and PoE noted",
+                lines[0] == "description " + "x" * 64 and "switchport access vlan 30" in lines
+                and "spanning-tree portfast" in lines and len(notes) == 3, (lines, notes))
+    copies = T.port_copies("cisco_ios", cisco, T.parse_profile(cisco))
+    ok &= check("same brand: lines copied exactly", copies["cisco_ios"]["lines"] == cisco)
+
+    print("\nDell: deciding from packet counts, across drawings")
+    status = """Port     Type         Duplex  Speed Neg      ctrl State       Pressure Mode
+-------- ------------ ------  ----- -------- ---- ----------- -------- -------
+gi1/0/1  1G-Copper    Full    1000  Enabled  Off  Up          Disabled On
+gi1/0/2  1G-Copper      --      --     --     --  Down           --     --
+gi1/0/3  1G-Copper      --      --     --     --  Down           --     --
+"""
+    def counters(a, b):
+        return ("    Port      InUcastPkts  InMcastPkts  InBcastPkts    InOctets\n"
+                f"  gi1/0/1      500 0 0 9999\n  gi1/0/2      {a} 0 0 9999\n  gi1/0/3      {b} 0 0 0\n")
+    def draw(when, uptime_days, a, b, history):
+        out = {"system": f"System Up Time (days,hour:min:sec):       {uptime_days},00:00:00\nSystem Name: LAB",
+               "status": status, "counters": counters(a, b), "config": "interface gigabitethernet1/0/9\nexit"}
+        data, history = T.build_stack(out, "lab", 6, history, now=when, vendor="dell_powerconnect")
+        return {p["name"]: p for p in data["members"][0]["ports"] if not p.get("absent")}, history
+    t0 = datetime(2026, 1, 5, 9, 0)
+    first, hist = draw(t0, 400, 1234, 0, None)
+    ok &= check("first drawing: up -> Active, old traffic -> Unsure, never any -> Inactive",
+                (first["gi1/0/1"]["activity"], first["gi1/0/2"]["activity"], first["gi1/0/3"]["activity"])
+                == ("active", "unsure", "inactive"), {k: (v["activity"], v["why"]) for k, v in first.items()})
+    later, hist2 = draw(t0 + timedelta(days=200), 600, 1234, 0, json_copy(hist))
+    ok &= check("200 days later, count never moved -> Inactive",
+                later["gi1/0/2"]["activity"] == "inactive" and "since 2026-01-05" in later["gi1/0/2"]["why"],
+                later["gi1/0/2"])
+    moved, _ = draw(t0 + timedelta(days=100), 500, 1300, 0, json_copy(hist))
+    ok &= check("100 days later, count went up -> Active", moved["gi1/0/2"]["activity"] == "active", moved["gi1/0/2"])
+    moved, _ = draw(t0 + timedelta(days=200), 600, 1300, 0, json_copy(hist))
+    ok &= check("200 days later, count went up -> Unsure (could have been 199 days ago)",
+                moved["gi1/0/2"]["activity"] == "unsure" and "went up" in moved["gi1/0/2"]["why"], moved["gi1/0/2"])
+    soon, _ = draw(t0 + timedelta(days=30), 430, 1234, 0, json_copy(hist))
+    ok &= check("30 days later, count never moved -> still Unsure", soon["gi1/0/2"]["activity"] == "unsure")
+    rebooted, _ = draw(t0 + timedelta(days=200), 10, 0, 0, json_copy(hist))
+    ok &= check("after a reboot, no traffic yet -> Unsure, not Inactive",
+                rebooted["gi1/0/2"]["activity"] == "unsure", rebooted["gi1/0/2"])
+    ok &= check("ports with no config lines aren't 'basic' (a Dell only lists ports that have settings)",
+                not first["gi1/0/2"]["basic"])
+    return ok
+
+
+def json_copy(x):
+    import json
+    return json.loads(json.dumps(x))
+
+
 def end_to_end():
     ok = True
     print("\nDrawing a pretend stack through the web app")
@@ -227,13 +333,19 @@ def end_to_end():
             cmds[cmd] = demo[key]
     cli = MockCLI("DEMO-IDF-E3", cmds, start_enabled=False, enable_secret="en-secret")
     stack = TelnetSwitch(cli, "netops", "sw-pass")
-    dell = TelnetSwitch(MockCLI("B218-5548P", {}), "netops", "sw-pass", user_prompt="User Name:")
+    ddemo, dcmds = dell_demo_outputs(), {}
+    for key, cmd in T.DELL_COMMANDS.items():
+        dcmds[cmd[0] if isinstance(cmd, tuple) else cmd] = ddemo[key]
+    dell_cli = MockCLI("DEMO-B2-DELL", dcmds, start_enabled=False, enable_secret="en-secret")
+    dell = TelnetSwitch(dell_cli, "netops", "sw-pass", user_prompt="User Name:")
+    aruba = TelnetSwitch(MockCLI("S3500-M205", {}, prompt_style="aruba"), "netops", "sw-pass", user_prompt="User: ")
     addr = f"127.0.0.1:{stack.port}"
     client = webapp.app.test_client()
     base = {"base_url": "http://127.0.0.1:5000"}
     client.post("/api/switches", json={"switches": [
         {"address": addr, "type": "cisco_ios", "protocol": "telnet", "building": "E Building", "location": "E3 IDF"},
-        {"address": f"127.0.0.1:{dell.port}", "type": "5548P", "protocol": "telnet"}]}, **base)
+        {"address": f"127.0.0.1:{dell.port}", "type": "5548P", "protocol": "telnet", "building": "B Building"},
+        {"address": f"127.0.0.1:{aruba.port}", "type": "S3500", "protocol": "telnet"}]}, **base)
     client.post("/api/settings", json={"default_protocol": "telnet", "parallel": 4, "timeout": 10}, **base)
     login = {"username": "netops", "password": "sw-pass", "secret": "en-secret"}
 
@@ -255,9 +367,23 @@ def end_to_end():
     pages = client.get("/api/topology/pages", **base).json["pages"]
     ok &= check("earlier drawings are listed", len(pages) >= 1 and pages[0]["name"] == "DEMO-IDF-E3", pages)
 
+    print("\nA Dell PowerConnect stack")
+    r = client.post("/api/topology", json={"address": f"127.0.0.1:{dell.port}", "months": 6, **login}, **base)
+    ok &= check("Dell stack read and drawn", r.status_code == 200 and r.json["ok"], r.json)
+    dpage = client.get(r.json["url"], **base).data if r.status_code == 200 else b""
+    ok &= check("Dell page: name, members, VLAN names, Dell wording",
+                b"DEMO-B2-DELL" in dpage and b"PowerConnect 5524P" in dpage and b"STAFF-DATA" in dpage
+                and b"doesn't record when" in dpage)
+    dsent = [c[0] if isinstance(c, tuple) else c for c in T.DELL_COMMANDS.values()]
+    ok &= check("every Dell command was sent", all(c in dell_cli.commands for c in dsent), dell_cli.commands)
+    ok &= check("Dell page holds no secrets from its config",
+                b"FAKE-COMMUNITY" not in dpage and b"FAKE0123456789" not in dpage)
+    ok &= check("Dell demo page loads", b"DEMO-B2-DELL" in client.get("/topology/demo?type=dell", **base).data)
+
     print("\nRefusals and safety")
-    r = client.post("/api/topology", json={"address": f"127.0.0.1:{dell.port}", **login}, **base)
-    ok &= check("a Dell in the switch list is refused", r.status_code == 400)
+    r = client.post("/api/topology", json={"address": f"127.0.0.1:{aruba.port}", **login}, **base)
+    ok &= check("an Aruba in the switch list is refused", r.status_code == 400 and "Aruba" in r.json["problems"][0],
+                r.json)
     r = client.post("/api/topology", json={"address": addr, "username": "netops"}, **base)
     ok &= check("no password -> asked for it", r.status_code == 400 and "password" in r.json["problems"][0])
     r = client.post("/api/topology", json={"address": addr, "username": "netops", "password": "wrong"}, **base)
@@ -274,11 +400,13 @@ def end_to_end():
                 not any(pw in saved for pw in ("sw-pass", "en-secret", "FAKE-SECRET-HASH", "FAKE-COMMUNITY")))
     stack.stop()
     dell.stop()
+    aruba.stop()
     return ok
 
 
 def main():
     ok = parsers()
+    ok &= dell_and_translation()
     ok &= end_to_end()
     print("\nALL PASSED" if ok else "\nSOME CHECKS FAILED")
     return 0 if ok else 1

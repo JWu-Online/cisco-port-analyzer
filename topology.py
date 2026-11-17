@@ -1,5 +1,6 @@
 """
-topology.py - draw a Cisco switch stack: every member, ports 1-48, VLANs and use.
+topology.py - draw a switch stack (Cisco Catalyst or Dell PowerConnect 5500):
+every member, ports 1-48, VLANs and use.
 
 Each stack member is drawn as a front panel. Every port shows its VLAN and is
 colored by whether it was used within the months you pick (6 by default), the
@@ -14,6 +15,12 @@ How a port counts as Active:
   4. An earlier run of this tool saw it up (kept in data/topology/history).
 If none of those, the port is Inactive only when there's N months of evidence
 (the member's uptime plus earlier runs). Otherwise it's Unsure.
+
+Dell PowerConnect 5500 switches don't record when a port was last used, only
+packet counts since they started. So there: link up now, or traffic since a
+switch that started less than N months ago, or counts that grew since an earlier
+run -> Active. No traffic since a start more than N months ago, or counts that
+haven't moved for N months of runs -> Inactive. Anything else is Unsure.
 
 Run it from the web app (Stack topology) or the command line:
     python topology.py 10.99.4.11 -u admin -p telnet -m 6
@@ -58,6 +65,17 @@ COMMANDS = {
     "link": "show interfaces link",
     "interfaces": "show interfaces",
 }
+DELL_COMMANDS = {
+    "system": ("show system", "show version"),
+    "stack": ("show stack", "show switch"),
+    "status": "show interfaces status",
+    "description": "show interfaces description",
+    "counters": "show interfaces counters",
+    "vlans": "show vlan",
+    "config": "show running-config",
+}
+VENDORS = {"cisco_ios": "Cisco Catalyst", "dell_powerconnect": "Dell PowerConnect"}
+COMMANDS_FOR = {"cisco_ios": COMMANDS, "dell_powerconnect": DELL_COMMANDS}
 LABEL = {"active": "Active", "inactive": "Inactive", "unsure": "Unsure"}
 
 
@@ -251,28 +269,178 @@ _SECRET_WORDS = re.compile(r"\b(password|secret|key|key-string|authentication-ke
 def parse_interface_configs(output):
     """'show running-config' -> {port: {"ifname", "lines", "removed"}}.
 
+    Works for Cisco (indented lines, ending at '!') and Dell (lines that may not
+    be indented, ending at 'exit', and 'interface range ...' blocks).
     Only interface sections are kept; the rest of the config (users, SNMP,
     TACACS keys) is ignored. A port line that carries a key or password (rare on
     access ports) is swapped for a '!' comment, so saved pages never hold secrets.
     """
-    configs, current = {}, None
+    configs, current, indented = {}, [], None
     for raw in (output or "").splitlines():
         line = raw.rstrip()
-        if line.startswith("interface "):
-            ifname = line.split(None, 1)[1].strip()
-            current = {"ifname": ifname, "lines": [], "removed": 0}
-            configs[normalize_intf(ifname)] = current
-        elif current is not None and line.startswith(" "):
-            body = line.strip()
-            secret = None if body.startswith("description ") else _SECRET_WORDS.search(body)
+        body = line.strip()
+        m = re.match(r"^interface\s+(?:range\s+)?(.+)$", line, re.I)
+        if m:
+            current, indented = [], None
+            for ifname in analyzer.expand_ports(m.group(1).strip()):
+                entry = configs.setdefault(normalize_intf(ifname), {"ifname": ifname, "lines": [], "removed": 0})
+                current.append(entry)
+            continue
+        if not current or not body:
+            continue
+        if body.lower() in ("exit", "!", "end"):
+            current = []
+            continue
+        if indented is None:
+            indented = line.startswith(" ")
+        if indented and not line.startswith(" "):
+            current = []                # the next top-level command ends an indented block
+            continue
+        lead = line[:len(line) - len(line.lstrip())]
+        secret = None if body.lower().startswith("description ") else _SECRET_WORDS.search(body)
+        for entry in current:
             if secret:
-                current["lines"].append(f" ! left out: a line with a key or password ({body[:secret.end()]} ...)")
-                current["removed"] += 1
+                entry["lines"].append(f"{lead}! left out: a line with a key or password ({body[:secret.end()]} ...)")
+                entry["removed"] += 1
             else:
-                current["lines"].append(line)
-        else:
-            current = None          # "!" or the next section ends the interface
+                entry["lines"].append(line)
     return configs
+
+
+# ---------------------------------------------------------------------------
+# Port settings that can move between a Cisco and a Dell
+# ---------------------------------------------------------------------------
+_IGNORED = {"switchport", "no shutdown", "switchport trunk encapsulation dot1q"}
+
+
+def parse_profile(lines, voice_id=""):
+    """A port's config lines (Cisco or Dell) -> the settings both brands understand.
+
+    Anything else ends up in "other", so the page can say it wasn't carried over.
+    """
+    prof = {"description": "", "mode": "", "access_vlan": "", "voice_vlan": "", "native_vlan": "",
+            "allowed": [], "shutdown": False, "portfast": False, "bpduguard": False, "general": False,
+            "other": []}
+    for raw in lines or []:
+        line = raw.strip()
+        low = re.sub(r"\s+", " ", line.lower())
+        if not line or low in _IGNORED:
+            continue
+        if line.startswith("!"):                       # left out because it had a key or password
+            prof["other"].append(line.lstrip("! ").strip())
+            continue
+        m = re.match(r"(?i)description\s+(.*)$", line)
+        if m:
+            prof["description"] = m.group(1).strip().strip('"').strip("'")
+            continue
+        m = re.fullmatch(r"switchport mode (access|trunk|general)", low)
+        if m:
+            prof["mode"] = m.group(1)
+            continue
+        m = (re.fullmatch(r"switchport access vlan (\d+)", low) or
+             re.fullmatch(r"switchport voice vlan (\d+)", low) or
+             re.fullmatch(r"switchport (?:trunk native vlan|general pvid) (\d+)", low) or
+             re.fullmatch(r"switchport (?:trunk|general) allowed vlan (?:add )?([\d,\-]+)(?: (?:tagged|untagged))?", low))
+        if m:
+            if low.startswith("switchport access"):
+                prof["access_vlan"] = m.group(1)
+            elif low.startswith("switchport voice"):
+                prof["voice_vlan"] = m.group(1)
+            elif "allowed" in low:
+                prof["allowed"].append(m.group(1))
+            else:
+                prof["native_vlan"] = m.group(1)
+            continue
+        if low == "voice vlan enable" and voice_id:      # Dell: the voice VLAN number is switch-wide
+            prof["voice_vlan"] = voice_id
+        elif low == "shutdown":
+            prof["shutdown"] = True
+        elif low.startswith("spanning-tree portfast"):
+            prof["portfast"] = True
+        elif low in ("spanning-tree bpduguard enable", "spanning-tree bpduguard"):
+            prof["bpduguard"] = True
+        else:
+            prof["other"].append(line)
+    if prof["mode"] == "general":                        # Dell's general mode is closest to a trunk
+        prof["mode"], prof["general"] = "trunk", True
+    return prof
+
+
+def basic_profile(desc, vlan):
+    """No config was read: rebuild what we know from the port's description and VLAN."""
+    prof = parse_profile([])
+    prof["description"] = desc or ""
+    if (vlan or "").isdigit():
+        prof["mode"], prof["access_vlan"] = "access", vlan
+    elif vlan == "trunk":
+        prof["mode"] = "trunk"
+        prof["other"].append("the trunk's VLANs (its config wasn't read)")
+    return prof
+
+
+def render_profile(prof, vendor):
+    """Lines to paste under 'interface X' on a `vendor` switch, and notes on what didn't carry over."""
+    cisco = vendor == "cisco_ios"
+    pre = " " if cisco else ""
+    lines, notes = [], []
+    desc = prof["description"]
+    if desc:
+        if not cisco:
+            if len(desc) > 64:
+                notes.append("Description cut to 64 characters, the Dell limit")
+                desc = desc[:64]
+            desc = desc.replace('"', "'")
+            desc = f'"{desc}"' if " " in desc else desc
+        lines.append(f"{pre}description {desc}")
+    if prof["mode"] == "trunk":
+        lines.append(f"{pre}switchport mode trunk")
+        if prof["native_vlan"]:
+            lines.append(f"{pre}switchport trunk native vlan {prof['native_vlan']}")
+        if prof["allowed"]:
+            vlans = ",".join(prof["allowed"])
+            lines.append(f" switchport trunk allowed vlan {vlans}" if cisco else f"switchport trunk allowed vlan add {vlans}")
+        if prof["general"] and cisco:
+            notes.append("It was in Dell 'general' mode, copied as a trunk: check its VLANs")
+    elif prof["mode"] == "access" or prof["access_vlan"]:
+        lines.append(f"{pre}switchport mode access")
+        if prof["access_vlan"]:
+            lines.append(f"{pre}switchport access vlan {prof['access_vlan']}")
+    if prof["voice_vlan"]:
+        if cisco:
+            lines.append(f" switchport voice vlan {prof['voice_vlan']}")
+        else:
+            notes.append(f"Voice VLAN {prof['voice_vlan']} not copied: on a Dell it's set for the whole switch "
+                         f"('voice vlan id {prof['voice_vlan']}'), then 'voice vlan enable' on the port")
+    if prof["portfast"]:
+        lines.append(f"{pre}spanning-tree portfast")
+    if prof["bpduguard"]:
+        lines.append(f"{pre}spanning-tree bpduguard enable")
+    if prof["shutdown"]:
+        lines.append(f"{pre}shutdown")
+    if prof["other"]:
+        notes.append("Not copied, add by hand if needed: " + "; ".join(prof["other"]))
+    return lines, notes
+
+
+def port_copies(vendor, config_lines, prof):
+    """What to paste for this port onto a Cisco and onto a Dell.
+
+    Same brand as the old switch: the old config lines exactly. Other brand:
+    the settings both understand, written the new switch's way.
+    """
+    out = {}
+    for target in VENDORS:
+        if target == vendor and config_lines is not None:
+            if target == "cisco_ios":
+                lines, notes = list(config_lines), []
+            else:
+                lines = [ln.strip() for ln in config_lines if ln.strip() and not ln.strip().startswith("!")]
+                left = len(config_lines) - len([ln for ln in config_lines if not ln.strip().startswith("!")])
+                notes = [f"{left} line(s) with a key or password left out"] if left else []
+        else:
+            lines, notes = render_profile(prof, target)
+        out[target] = {"lines": lines, "notes": notes}
+    return out
 
 
 def parse_link(output):
@@ -402,17 +570,52 @@ def evaluate_port(now, window, months, connected, down_text, uptime, last_used_d
 # ---------------------------------------------------------------------------
 def _port_count(max_port, model=""):
     """Ports to draw: from the model when it says (C9300-48P -> 48), else round up."""
-    m = re.search(r"-(8|12|16|24|48)[A-Z]", model or "")
+    m = re.search(r"-(8|12|16|24|48)[A-Z]", model or "") or re.search(r"\b55(24|48)", model or "")
     if m:
         return max(int(m.group(1)), max_port)
     return next((size for size in (8, 12, 16, 24, 48) if max_port <= size), LAST_PORT)
 
 
-def build_stack(outputs, host, months=6, history=None, now=None, where=""):
+def _front_panel(names):
+    """{member: {port number: name}} for front-panel ports 1-48.
+
+    Two names on one number (2960-X: Gi1/0/1 and uplink Te1/0/1)? Keep the type
+    with the most ports on that member: that's the row of access ports.
+    """
+    by_member = {}
+    for name in names:
+        pos = port_position(name)
+        if not pos:
+            continue
+        ptype, member, slot, port = pos
+        if slot != 0 or ptype in EXCLUDED_TYPES or not FIRST_PORT <= port <= LAST_PORT:
+            continue
+        by_member.setdefault(member, {}).setdefault(port, []).append((ptype, name))
+    chosen = {}
+    for member, ports in by_member.items():
+        count = {}
+        for cands in ports.values():
+            for ptype, _ in cands:
+                count[ptype] = count.get(ptype, 0) + 1
+        chosen[member] = {p: max(cands, key=lambda c: count[c[0]])[1] for p, cands in ports.items()}
+    return chosen
+
+
+def _touch_history(history, now):
+    if not history.get("first_run"):
+        history["first_run"] = now.isoformat(timespec="seconds")
+    history["last_run"] = now.isoformat(timespec="seconds")
+    history["runs"] = history.get("runs", 0) + 1
+    return history.setdefault("ports", {})
+
+
+def build_stack(outputs, host, months=6, history=None, now=None, where="", vendor="cisco_ios"):
     """Turn what the switch printed into the data the page draws. Returns (data, history).
 
     No network here, so it's easy to test.
     """
+    if vendor == "dell_powerconnect":
+        return build_dell_stack(outputs, host, months, history, now, where)
     now = (now or datetime.now()).replace(microsecond=0)
     window = timedelta(days=months * DAYS_PER_MONTH)
     history = history or empty_history(host)
@@ -436,35 +639,11 @@ def build_stack(outputs, host, months=6, history=None, now=None, where=""):
         warnings.append("This switch didn't answer 'show interfaces link', so link down-times weren't "
                         "used. Results rely on Last input/output and earlier runs.")
 
-    # Front-panel ports 1-48 for each member
-    by_member = {}
-    for name in set(status) | set(intfs):
-        pos = port_position(name)
-        if not pos:
-            continue
-        ptype, member, slot, port = pos
-        if slot != 0 or ptype in EXCLUDED_TYPES or not FIRST_PORT <= port <= LAST_PORT:
-            continue
-        by_member.setdefault(member, {}).setdefault(port, []).append((ptype, name))
-    # Two names on one number (2960-X: Gi1/0/1 and uplink Te1/0/1)? Keep the type
-    # with the most ports on that member: that's the row of access ports.
-    chosen = {}
-    for member, ports in by_member.items():
-        count = {}
-        for cands in ports.values():
-            for ptype, _ in cands:
-                count[ptype] = count.get(ptype, 0) + 1
-        chosen[member] = {p: max(cands, key=lambda c: count[c[0]])[1] for p, cands in ports.items()}
-
+    chosen = _front_panel(set(status) | set(intfs))
     member_numbers = sorted(set(chosen) | set(switch_rows))
     if not switch_rows:
         warnings.append("'show switch' returned nothing, so this is drawn as a single switch.")
-
-    if not history.get("first_run"):
-        history["first_run"] = now.isoformat(timespec="seconds")
-    history["last_run"] = now.isoformat(timespec="seconds")
-    history["runs"] = history.get("runs", 0) + 1
-    port_history = history.setdefault("ports", {})
+    port_history = _touch_history(history, now)
 
     members_out = []
     totals = {"active": 0, "inactive": 0, "unsure": 0, "up_now": 0, "total": 0}
@@ -511,9 +690,11 @@ def build_stack(outputs, host, months=6, history=None, now=None, where=""):
                 "why": why, "up_now": connected,
                 "admin_down": state == "disabled", "err": state.startswith("err-"),
             })
-            if name in configs:
-                ports_out[-1].update(ifname=configs[name]["ifname"], config=configs[name]["lines"],
-                                     removed=configs[name]["removed"])
+            cfg = configs.get(name)
+            if cfg:
+                ports_out[-1].update(ifname=cfg["ifname"], config=cfg["lines"], removed=cfg["removed"])
+            prof = parse_profile(cfg["lines"]) if cfg else basic_profile(ports_out[-1]["desc"], vlan)
+            ports_out[-1].update(copy=port_copies("cisco_ios", cfg["lines"] if cfg else None, prof), basic=cfg is None)
 
         if counts["unsure"]:
             warnings.append(
@@ -544,7 +725,7 @@ def build_stack(outputs, host, months=6, history=None, now=None, where=""):
                            f"failure will split it.")
 
     data = {
-        "host": host, "where": where,
+        "host": host, "where": where, "vendor": "cisco_ios", "vendor_name": VENDORS["cisco_ios"],
         "hostname": version["hostname"] or outputs.get("prompt", "") or host,
         "generated": now.strftime("%Y-%m-%d %H:%M"),
         "months": months, "summary": totals, "warnings": warnings,
@@ -552,6 +733,275 @@ def build_stack(outputs, host, months=6, history=None, now=None, where=""):
         "vlan_names": {v: vlan_names[v] for v in sorted(vlan_counts, key=lambda v: (len(v), v)) if v in vlan_names},
         "has_config": bool(configs),
         "links": _stack_links(neighbors, stack_ports),
+        "history_runs": history["runs"], "history_since": history["first_run"][:10],
+    }
+    return data, history
+
+
+# ---------------------------------------------------------------------------
+# Dell PowerConnect 5500 (5524, 5548, 5548P)
+# ---------------------------------------------------------------------------
+def parse_dell_system(output):
+    """'show system' -> hostname, uptime, model, and a model per stack unit when it lists them."""
+    output = output or ""
+    info = {"hostname": "", "uptime": None, "model": "", "units": {}}
+    m = re.search(r"(?im)^\s*System Name:\s*(\S+)", output)
+    if m:
+        info["hostname"] = m.group(1)
+    days = analyzer.uptime_from(output)
+    info["uptime"] = timedelta(days=days) if days is not None else None
+    m = re.search(r"(?i)PowerConnect\s*(\w+)", output)
+    if m:
+        info["model"] = "PowerConnect " + m.group(1).upper()
+    for line in output.splitlines():
+        u = re.match(r"(?i)^\s*(\d{1,2})\s+(?:Dell\s+)?(?:PowerConnect\s+)?(55\d\dP?)\b", line)
+        if u:
+            info["units"][int(u.group(1))] = "PowerConnect " + u.group(2).upper()
+    return info
+
+
+def parse_dell_stack(output):
+    """'show stack' -> {unit: role}. Best effort: the layout changes between firmware versions,
+    so this only looks for a unit number and the last master/backup/slave/member word on the line."""
+    roles = {}
+    for line in (output or "").splitlines():
+        m = re.match(r"^\s*(\d{1,2})\s+(.*)$", line)
+        if not m or int(m.group(1)) > 8:
+            continue
+        words = re.findall(r"(?i)\b(master|backup|slave|member)\b", m.group(2))
+        if words:
+            roles[int(m.group(1))] = {"master": "Active", "backup": "Standby"}.get(words[-1].lower(), "Member")
+    return roles
+
+
+def parse_dell_vlans(output):
+    """'show vlan' -> (names, untagged, tagged) as {vlan: name}, {port: {vlans}}, {port: {vlans}}.
+
+    Header:  Vlan  Name  Tagged Ports  UnTagged Ports  Created by
+    Port lists can wrap onto the next lines; each list is put in whichever of the
+    two columns it starts closest to.
+    """
+    names, untagged, tagged = {}, {}, {}
+    lines = (output or "").splitlines()
+    head = next((i for i, ln in enumerate(lines)
+                 if re.search(r"(?i)\buntagged\b", ln) and re.search(r"(?i)\bvlan\b", ln)), None)
+    if head is None:
+        return names, untagged, tagged
+    h = lines[head].lower()
+    name_col, untag_col, created = h.find("name"), h.find("untagged"), h.find("created")
+    tag = re.search(r"(?<!un)tagged", h)
+    tag_col = tag.start() if tag else untag_col
+    port_list = re.compile(r"(?<![\w-])(?:gi|te|fa|xg|po|ch)\d[\w/,\-]*\d(?![\w/])", re.I)
+    current = None
+    for line in lines[head + 1:]:
+        if not line.strip() or set(line.strip()) <= set("- "):
+            continue
+        lists = [t for t in port_list.finditer(line) if t.start() >= name_col + 1]
+        m = re.match(r"^\s*(\d{1,4})\b", line)
+        if m:
+            current = m.group(1)
+            # The name runs from the VLAN number to the first port list (or the Created-by code)
+            end = lists[0].start() if lists else (created if created > m.end() else len(line))
+            name = re.sub(r"\s+(?:[DSGRV]{1,3})\s*$", "", line[m.end():end]).strip()
+            if name and name != current:
+                names[current] = name
+        if current is None:
+            continue
+        for tok in lists:
+            bucket = tagged if abs(tok.start() - tag_col) < abs(tok.start() - untag_col) else untagged
+            for port in analyzer.expand_ports(tok.group().replace(",", " ")):
+                bucket.setdefault(normalize_intf(port), set()).add(current)
+    return names, untagged, tagged
+
+
+def dell_packet_totals(output):
+    """'show interfaces counters' -> {port: packets in + out since the switch started}."""
+    totals, columns = {}, None
+    for line in (output or "").splitlines():
+        words = line.split()
+        if words and words[0].lower() == "port" and len(words) > 1:
+            columns = [w.lower() for w in words[1:]]          # InUcastPkts InMcastPkts ... InOctets
+            continue
+        m = analyzer.DELL_PORT.match(line)
+        if not m:
+            continue
+        values = words[1:]
+        if columns and len(columns) == len(values):
+            numbers = [int(v) for c, v in zip(columns, values) if "pkts" in c and v.isdigit()]
+        else:
+            numbers = [int(v) for v in values if v.isdigit()]
+        if numbers:
+            key = normalize_intf(m.group(1))
+            totals[key] = totals.get(key, 0) + sum(numbers)
+    return totals
+
+
+def evaluate_counter_port(now, window, months, connected, total, uptime, hist, same_boot):
+    """Dell: decide from packet counts since the switch started, plus earlier runs.
+
+    Returns (activity, last_active, why) like evaluate_port.
+    """
+    evidence = []
+    if connected:
+        evidence.append((now, "Link is up now"))
+    if hist.get("last_seen_up"):
+        seen = datetime.fromisoformat(hist["last_seen_up"])
+        evidence.append((seen, f"In use on {seen:%Y-%m-%d} (seen by an earlier run)"))
+    checked = datetime.fromisoformat(hist["checked"]) if hist.get("checked") else None
+    grew = bool(total is not None and same_boot and checked and hist.get("total") is not None and total > hist["total"])
+    if grew:
+        evidence.append((checked, f"Traffic since the run on {checked:%Y-%m-%d}"))
+    if total and uptime is not None and uptime <= window:
+        evidence.append((now - uptime, f"{total:,} packets since the switch started {human_span(uptime)} ago"))
+
+    last_active, why = max(evidence, key=lambda e: e[0]) if evidence else (None, "")
+    if last_active is not None and now - last_active <= window:
+        return "active", last_active, why
+
+    since = datetime.fromisoformat(hist["total_since"]) if hist.get("total_since") and same_boot else None
+    if total == 0 and uptime is not None and uptime >= window:
+        return "inactive", last_active, f"No traffic in the {human_span(uptime)} since the switch started"
+    if total and since and total == hist.get("total") and now - since >= window:
+        return "inactive", last_active, f"No new traffic since {since:%Y-%m-%d}"
+    if total is None:
+        return "unsure", last_active, "No packet counts could be read"
+    if total == 0:
+        return "unsure", last_active, (f"No traffic, but the switch started only {human_span(uptime)} ago"
+                                       if uptime else "No traffic, but the switch's uptime couldn't be read")
+    if grew:
+        return "unsure", last_active, (f"Its count went up since the drawing on {checked:%Y-%m-%d}, but that's more "
+                                       f"than {months:g} months ago, so it can't tell when. Draw it more often")
+    started = f" {human_span(uptime)} ago" if uptime else ""
+    return "unsure", last_active, (f"{total:,} packets since the switch started{started}, but a Dell doesn't "
+                                   f"record when. If the count stays the same in later drawings, it turns Inactive")
+
+
+def build_dell_stack(outputs, host, months=6, history=None, now=None, where=""):
+    """Same page data as build_stack, from a Dell PowerConnect 5500 stack."""
+    now = (now or datetime.now()).replace(microsecond=0)
+    window = timedelta(days=months * DAYS_PER_MONTH)
+    history = history or empty_history(host)
+    warnings = []
+
+    system = parse_dell_system(outputs.get("system"))
+    roles = parse_dell_stack(outputs.get("stack"))
+    base = analyzer.parse_dell({"show interfaces status": outputs.get("status") or "",
+                                "show interfaces description": outputs.get("description") or ""}, None)
+    ports_by = {normalize_intf(p["port"]): p for p in base}
+    totals = dell_packet_totals(outputs.get("counters"))
+    vlan_names, untagged, tagged = parse_dell_vlans(outputs.get("vlans"))
+    configs = parse_interface_configs(outputs.get("config"))
+    voice = re.search(r"(?im)^\s*voice vlan id (\d+)", outputs.get("config") or "")
+    voice_id = voice.group(1) if voice else ""
+
+    if not ports_by:
+        raise ValueError("Read the switch, but no ports could be read. Is it a Dell PowerConnect 5500?")
+    if not outputs.get("counters"):
+        warnings.append("This switch didn't answer 'show interfaces counters', so only ports that are up "
+                        "now can be called Active.")
+
+    uptime = system["uptime"]
+    boot = now - uptime if uptime else None
+    prev = history.get("boot")
+    same_boot = bool(boot and prev and abs(datetime.fromisoformat(prev) - boot) < timedelta(hours=1))
+    if boot:
+        history["boot"] = boot.isoformat(timespec="seconds")
+    port_history = _touch_history(history, now)
+    chosen = _front_panel(ports_by)
+
+    members_out = []
+    summary = {"active": 0, "inactive": 0, "unsure": 0, "up_now": 0, "total": 0}
+    vlan_counts = {}
+    counted = 0               # Unsure ports that had traffic at some unknown time
+    for num in sorted(chosen):
+        model = system["units"].get(num) or system["model"]
+        names = chosen[num]
+        size = _port_count(max(names), model)
+        counts = {"active": 0, "inactive": 0, "unsure": 0, "up_now": 0}
+        ports_out = []
+        for port in range(1, size + 1):
+            name = names.get(port)
+            if not name:
+                ports_out.append({"num": port, "absent": True})
+                continue
+            b = ports_by[name]
+            connected = b["status"] == "up"
+            cfg = configs.get(name)
+            if cfg is None and configs:        # a Dell only lists ports that have something set
+                long_name = re.sub(r"(?i)^(gi|te|fa)", lambda x: {"gi": "gigabitethernet", "te": "tengigabitethernet",
+                                                               "fa": "fastethernet"}[x.group(1).lower()], b["port"])
+                cfg = {"ifname": long_name, "lines": [], "removed": 0}
+            prof = parse_profile(cfg["lines"], voice_id) if cfg else None
+            state = "connected" if connected else ("disabled" if prof and prof["shutdown"] else "notconnect")
+            if prof and prof["mode"] == "trunk":
+                vlan = "trunk"
+            elif prof and prof["access_vlan"]:
+                vlan = prof["access_vlan"]
+            elif tagged.get(name):
+                vlan = "trunk"
+            elif len(untagged.get(name, ())) == 1:
+                vlan = next(iter(untagged[name]))
+            else:
+                vlan = "1" if cfg is not None else "?"
+            total = totals.get(name)
+            hist = port_history.get(name, {})
+            activity, last_active, why = evaluate_counter_port(now, window, months, connected, total,
+                                                               uptime, hist, same_boot)
+            if activity == "unsure" and total:
+                counted += 1
+
+            new = dict(hist)
+            if last_active and (not hist.get("last_seen_up") or last_active > datetime.fromisoformat(hist["last_seen_up"])):
+                new["last_seen_up"] = last_active.isoformat(timespec="seconds")
+            if total is not None:
+                if not same_boot or hist.get("total") != total or not hist.get("total_since"):
+                    new["total_since"] = now.isoformat(timespec="seconds")
+                new["total"] = total
+            new["checked"] = now.isoformat(timespec="seconds")
+            port_history[name] = new
+
+            vlan_counts[vlan] = vlan_counts.get(vlan, 0) + 1
+            counts[activity] += 1
+            counts["up_now"] += int(connected)
+            ports_out.append({
+                "num": port, "name": b["port"], "desc": b.get("description", ""),
+                "status": state, "vlan": vlan, "speed": "", "duplex": "",
+                "activity": activity,
+                "last_active": last_active.strftime("%Y-%m-%d") if last_active else "",
+                "why": why, "up_now": connected,
+                "admin_down": state == "disabled", "err": False,
+            })
+            if cfg:
+                ports_out[-1].update(ifname=cfg["ifname"], config=cfg["lines"], removed=cfg["removed"])
+            prof = prof or basic_profile(ports_out[-1]["desc"], vlan)
+            ports_out[-1].update(copy=port_copies("dell_powerconnect", cfg["lines"] if cfg else None, prof),
+                                 basic=cfg is None)
+
+        members_out.append({
+            "number": num,
+            "role": roles.get(num, "Standalone" if len(chosen) == 1 else ""),
+            "state": "", "model": model,
+            "uptime": human_span(uptime) if uptime else "",
+            "port_count": size, "stack_ports": [], "counts": counts, "ports": ports_out,
+        })
+        for k in counts:
+            summary[k] += counts[k]
+        summary["total"] += counts["active"] + counts["inactive"] + counts["unsure"]
+
+    if counted:
+        warnings.append(f"{counted} port(s) had traffic since the switch started {human_span(uptime) if uptime else ''} "
+                        f"ago, but Dell switches don't record when, so they're Unsure. Each drawing remembers the "
+                        f"counts: draw this stack again over the next weeks, and ports whose counts never move "
+                        f"turn Inactive once that covers {months:g} months.")
+
+    data = {
+        "host": host, "where": where, "vendor": "dell_powerconnect", "vendor_name": VENDORS["dell_powerconnect"],
+        "hostname": system["hostname"] or outputs.get("prompt", "") or host,
+        "generated": now.strftime("%Y-%m-%d %H:%M"),
+        "months": months, "summary": summary, "warnings": warnings,
+        "vlans": _vlan_legend(vlan_counts), "members": members_out,
+        "vlan_names": {v: vlan_names[v] for v in sorted(vlan_counts, key=lambda v: (len(v), v)) if v in vlan_names},
+        "has_config": bool(configs), "links": [],
         "history_runs": history["runs"], "history_since": history["first_run"][:10],
     }
     return data, history
@@ -591,17 +1041,17 @@ def _stack_links(neighbors, stack_ports):
 # ---------------------------------------------------------------------------
 # Talking to the switch, saving the page
 # ---------------------------------------------------------------------------
-def collect_outputs(address, protocol, login, timeout=20, progress=print):
+def collect_outputs(address, protocol, login, timeout=20, progress=print, vendor="cisco_ios"):
     """Log in once and run every command. A command the switch doesn't know gives ''."""
     outputs = {}
-    with sw.connect(address, "cisco_ios", protocol, login, timeout) as conn:
+    with sw.connect(address, vendor, protocol, login, timeout) as conn:
         outputs["prompt"] = sw.prompt_name(conn)
-        for key, command in COMMANDS.items():
+        for key, command in COMMANDS_FOR[vendor].items():
             tries = list(command) if isinstance(command, tuple) else [command]
             progress(f"  {tries[0]}")
             try:
                 _, outputs[key] = sw.run_first_working(conn, tries,
-                                                       read_timeout=300 if key in ("interfaces", "config") else 180)
+                                                       read_timeout=300 if key in ("interfaces", "config", "counters") else 180)
             except Exception as exc:                 # one bad command shouldn't stop the rest
                 progress(f"    skipped: {sw.friendly_error(exc)}")
                 outputs[key] = ""
@@ -635,21 +1085,27 @@ def list_pages(data_dir, limit=15):
     return out
 
 
-def run_topology(address, protocol, login, months=6, timeout=20, data_dir=None, where="", progress=print):
+def run_topology(address, protocol, login, months=6, timeout=20, data_dir=None, where="", progress=print,
+                 vendor="cisco_ios"):
     """Read the stack, decide each port, remember what we saw, save the page.
     Returns (data, html, saved_path)."""
     data_dir = Path(data_dir or DEFAULT_DIR)
-    outputs = collect_outputs(address, protocol, login, timeout, progress)
-    data, history = build_stack(outputs, address, months, load_history(data_dir, address), where=where)
+    outputs = collect_outputs(address, protocol, login, timeout, progress, vendor)
+    data, history = build_stack(outputs, address, months, load_history(data_dir, address), where=where,
+                                vendor=vendor)
     save_history(data_dir, address, history)
     html = render_html(data)
     return data, html, save_page(data_dir, data, html)
 
 
-def run_demo(months=6, data_dir=None, save=True):
-    """A made-up 3-member stack, so you can see the page without a switch."""
-    from topology_demo import demo_outputs
-    data, _ = build_stack(demo_outputs(), "demo-stack", months, where="Made-up sample stack")
+def run_demo(months=6, data_dir=None, save=True, vendor="cisco_ios"):
+    """A made-up stack (Cisco or Dell), so you can see the page without a switch."""
+    from topology_demo import demo_outputs, dell_demo_outputs
+    if vendor == "dell_powerconnect":
+        data, _ = build_stack(dell_demo_outputs(), "demo-dell-stack", months, where="Made-up sample stack",
+                              vendor=vendor)
+    else:
+        data, _ = build_stack(demo_outputs(), "demo-stack", months, where="Made-up sample stack")
     html = render_html(data)
     return data, html, save_page(Path(data_dir or DEFAULT_DIR), data, html) if save else None
 
@@ -658,8 +1114,10 @@ def run_demo(months=6, data_dir=None, save=True):
 # Command line
 # ---------------------------------------------------------------------------
 def main():
-    ap = argparse.ArgumentParser(description="Draw a Cisco switch stack: ports 1-48, VLANs and use.")
+    ap = argparse.ArgumentParser(description="Draw a Cisco Catalyst or Dell PowerConnect stack: ports 1-48, "
+                                             "VLANs and use.")
     ap.add_argument("hosts", nargs="*", help="Stack address(es)")
+    ap.add_argument("-t", "--type", default="cisco", help="cisco (Catalyst, the default) or dell (PowerConnect 5500)")
     ap.add_argument("-u", "--username")
     ap.add_argument("-p", "--protocol", choices=["telnet", "ssh"], default="telnet")
     ap.add_argument("-m", "--months", type=float, default=6)
@@ -667,9 +1125,12 @@ def main():
     ap.add_argument("--demo", action="store_true", help="Draw a made-up sample stack")
     ap.add_argument("--no-open", action="store_true", help="Don't open the page in a browser")
     args = ap.parse_args()
+    vendor = sw.clean_type(args.type)
+    if vendor not in VENDORS:
+        ap.error("--type must be cisco or dell")
 
     if args.demo:
-        _, _, path = run_demo(args.months)
+        _, _, path = run_demo(args.months, vendor=vendor)
         print(f"Saved {path}")
         if not args.no_open:
             webbrowser.open(path.as_uri())
@@ -688,7 +1149,7 @@ def main():
     for host in args.hosts:
         print(f"Reading {host} over {args.protocol}...")
         try:
-            data, _, path = run_topology(host, args.protocol, login, args.months, args.timeout)
+            data, _, path = run_topology(host, args.protocol, login, args.months, args.timeout, vendor=vendor)
         except Exception as exc:
             print(f"  Couldn't read it: {sw.friendly_error(exc)}")
             failed += 1
