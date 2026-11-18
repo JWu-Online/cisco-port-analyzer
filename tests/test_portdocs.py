@@ -94,11 +94,14 @@ def mac_tables():
     ok &= check("Dell: colons turned into 0011.2233.4408, ch1 left out",
                 dell == {("gi", "1/0/8"): [("0011.2233.4408", "20"), ("a4b1.c2d3.e408", "40")]}, dell)
     ok &= check("Aruba", P.parse_mac_table(ARUBA_MACS) == {("ge", "0/0/0"): [("000b.8600.0001", "15")]})
-    ok &= check("the port's own VLAN first; others say which VLAN",
-                P.mac_text("20", [("a4b1.c2d3.e401", "40"), ("0011.2233.4401", "20")])
-                == "0011.2233.4401, a4b1.c2d3.e401 (VLAN 40)")
-    ok &= check("trunks just say so", P.mac_text("trunk", [("0011.2233.4401", "20")]) == "Trunk port"
-                and P.mac_text("routed", []) == "Routed port")
+    ok &= check("just the MAC addresses, and how many",
+                P.mac_columns("20", [("a4b1.c2d3.e401", "40"), ("0011.2233.4401", "20")])
+                == ("0011.2233.4401, a4b1.c2d3.e401", 2))
+    ok &= check("the same MAC on two VLANs counts once",
+                P.mac_columns("20", [("0011.2233.4401", "20"), ("0011.2233.4401", "40")]) == ("0011.2233.4401", 1))
+    ok &= check("no MACs -> blank and 0", P.mac_columns("20", []) == ("", 0))
+    ok &= check("trunks just say so, with no count", P.mac_columns("trunk", [("0011.2233.4401", "20")]) == ("Trunk port", "")
+                and P.mac_columns("routed", []) == ("Routed port", ""))
     text = P.csv_text([{"description": "=HYPERLINK(\"x\")", "vlan": "20", "tagged": "40 VOICE-PHONES"}])
     ok &= check("text Excel would run as a formula is made harmless", "'=HYPERLINK" in text, text)
     return ok
@@ -202,11 +205,11 @@ def full_run():
                 and gi1.get("Member/slot") == "1" and gi1.get("Port") == "1"
                 and gi1.get("Description") == "Rm E-310 Desk 2" and gi1.get("VLAN") == "20"
                 and gi1.get("VLAN name") == "STAFF-DATA" and gi1.get("Tagged VLANs") == "40 VOICE-PHONES"
-                and gi1.get("MAC addresses") == "0011.2233.4401, a4b1.c2d3.e401 (VLAN 40)"
+                and gi1.get("MAC addresses") == "0011.2233.4401, a4b1.c2d3.e401" and gi1.get("MAC count") == "2"
                 and gi1.get("Result") == "Active" and gi1.get("Status") == "Link up" and gi1.get("Speed") == "1000", gi1)
     trunk = by.get(("DEMO-IDF-E3", "Gi1/0/28"), {})
     ok &= check("Cisco trunk: VLAN says Trunk, MAC column says Trunk port, its VLANs listed",
-                trunk.get("VLAN") == "Trunk" and trunk.get("MAC addresses") == "Trunk port"
+                trunk.get("VLAN") == "Trunk" and trunk.get("MAC addresses") == "Trunk port" and trunk.get("MAC count") == ""
                 and bool(trunk.get("Tagged VLANs")), trunk)
     problem = by.get(("DEMO-IDF-E3", "Gi1/0/5"), {})
     ok &= check("Cisco issues and power carried over", problem.get("Issues") == "Receive errors", problem)
@@ -215,12 +218,12 @@ def full_run():
     dell8 = by.get(("DEMO-B2-DELL", "gi1/0/8"), {})
     ok &= check("Dell desk port: PVID 20, voice VLAN tagged, both MACs",
                 dell8.get("VLAN") == "20" and dell8.get("Tagged VLANs") == "40 VOICE-PHONES"
-                and dell8.get("MAC addresses") == "0011.2233.4408, a4b1.c2d3.e408 (VLAN 40)", dell8)
+                and dell8.get("MAC addresses") == "0011.2233.4408, a4b1.c2d3.e408" and dell8.get("MAC count") == "2", dell8)
     nx1 = by.get(("LGCC-N7K", "Eth1/1"), {})
     nx4 = by.get(("LGCC-N7K", "Eth1/4"), {})
     ok &= check("Nexus: trunk port, and an access port's MAC and VLAN name",
                 nx1.get("VLAN") == "Trunk" and nx1.get("MAC addresses") == "Trunk port"
-                and nx4.get("MAC addresses") == "0050.5689.0001" and nx4.get("Port") == "4"
+                and nx4.get("MAC addresses") == "0050.5689.0001" and nx4.get("MAC count") == "1" and nx4.get("Port") == "4"
                 and nx4.get("Member/slot") == "1" and nx4.get("Building") == "M Building", (nx1, nx4))
     ar0 = by.get(("S3500-M205", "GE0/0/0"), {})
     ok &= check("Aruba: VLAN name from 'show vlan', MAC, result",

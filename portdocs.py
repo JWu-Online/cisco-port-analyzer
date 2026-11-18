@@ -72,16 +72,12 @@ def parse_mac_table(output):
     return found
 
 
-def mac_text(vlan, macs):
-    """What goes in the MAC addresses column for one port."""
-    if vlan == "trunk":
-        return "Trunk port"
-    if vlan == "routed":
-        return "Routed port"
-    parts = []
-    for mac, mac_vlan in sorted(macs, key=lambda e: (e[1] != vlan, int(e[1] or 0), e[0])):
-        parts.append(mac + (f" (VLAN {mac_vlan})" if mac_vlan and mac_vlan != vlan else ""))
-    return ", ".join(parts)
+def mac_columns(vlan, macs):
+    """(MAC addresses, MAC count) for one port. Trunks and routed ports just say what they are."""
+    if vlan in ("trunk", "routed"):
+        return ("Trunk port" if vlan == "trunk" else "Routed port"), ""
+    found = sorted({mac for mac, _ in macs})          # the same MAC on two VLANs counts once
+    return ", ".join(found), len(found)
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +89,7 @@ COLUMNS = [
     ("VLAN", "vlan"), ("VLAN name", "vlan_name"), ("Tagged VLANs", "tagged"), ("Status", "status"),
     ("Speed", "speed"), ("Duplex", "duplex"), ("Result", "result"), ("Last active", "last_active"),
     ("Why", "why"), ("Issues", "issues"), ("Power", "power"), ("MAC addresses", "macs"),
+    ("MAC count", "mac_count"),
 ]
 STATUS = {"connected": "Link up", "notconnect": "No link", "disabled": "Shut down",
           "err-disabled": "Err-disabled", "err-disable": "Err-disabled", "up": "Link up", "down": "No link",
@@ -218,9 +215,8 @@ def document_switch(switch, login, months, timeout=20, history_dir=None, debug_d
         return out
     macs = parse_mac_table(mac_output)
     for r in rows:
-        found = macs.get(r["_key"], [])
-        r["macs"] = mac_text(r["_vlan"], found)
-        out["macs"] += 0 if r["_vlan"] in ("trunk", "routed") else len(found)
+        r["macs"], r["mac_count"] = mac_columns(r["_vlan"], macs.get(r["_key"], []))
+        out["macs"] += r["mac_count"] or 0
     out["rows"] = rows
     if not rows:
         out["problem"] = "Logged in, but no ports could be read. Is the switch type right?"
