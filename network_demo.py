@@ -1,184 +1,122 @@
 """
-network_demo.py - A made-up campus for the Network map's sample page and tests.
+network_demo.py - A made-up campus, as Observium's database would hold it, for the
+Network map's sample page and tests.
 
-What the switches print is generated, so the sample goes through the same reading as
-real switches:
-  * two Nexus 7000 cores and an edge router that isn't on the list
-  * four distribution switches (B and E: Catalyst 4507; C: a pair of Catalyst 9500)
-  * Cisco access switches (one daisy-chained), one directly on the core, an Aruba seen
-    by LLDP, a Dell nothing reports (found by its MAC address), one that refuses the login
-  * phones and access points in the CDP output, which the map leaves out
+  * two Nexus 7000 cores, a firewall Observium monitors, and an edge router it doesn't
+  * distribution: B and E are Catalyst 4507s, C is a pair of Catalyst 9500s
+  * closets: Catalysts (one daisy-chained), a Dell that only reports the link from its own
+    end, an Aruba, one switch that's down, one closet straight off the core
+  * things the map leaves out: phones, access points, a VMware host Observium monitors
 """
 
-SWITCHES = [
-    # address, type, building, location, hostname, model
-    ("10.0.0.1", "cisco_nxos", "M Building", "Main MDF", "CORE-1", "Nexus7000 C7010"),
-    ("10.0.0.2", "cisco_nxos", "M Building", "Main MDF", "CORE-2", "Nexus7000 C7010"),
-    ("10.2.0.1", "cisco_ios", "B Building", "B MDF", "B-DIST", "WS-C4507R+E"),
-    ("10.3.0.1", "cisco_ios", "C Building", "C MDF", "C-DIST-1", "C9500-24Y4C"),
-    ("10.3.0.2", "cisco_ios", "C Building", "C MDF", "C-DIST-2", "C9500-24Y4C"),
-    ("10.5.0.1", "cisco_ios", "E Building", "E MDF", "E-DIST", "WS-C4507R+E"),
-    ("10.2.1.11", "cisco_ios", "B Building", "B1 IDF", "B1-IDF", "C9300-48P"),
-    ("10.2.1.12", "dell_powerconnect", "B Building", "B2 IDF", "B2-IDF", "5548P"),
-    ("10.2.1.13", "cisco_ios", "B Building", "B3 IDF", "B3-IDF", "WS-C2960X-48FPD-L"),
-    ("10.2.1.14", "cisco_ios", "B Building", "B3 IDF", "B3-IDF-2", "WS-C2960X-48FPD-L"),
-    ("10.2.1.15", "cisco_ios", "B Building", "B4 IDF", "B4-IDF", "C9300-48P"),
-    ("10.3.1.11", "cisco_ios", "C Building", "C1 IDF", "C1-IDF", "C9300-48P"),
-    ("10.3.1.12", "cisco_ios", "C Building", "C2 IDF", "C2-IDF", "C9300-48P"),
-    ("10.3.1.13", "cisco_ios", "C Building", "C3 IDF", "C3-IDF", "C9300-24P"),
-    ("10.3.1.14", "aruba_mas", "C Building", "C4 IDF", "C4-IDF", "ArubaS3500-48P"),
-    ("10.5.1.11", "cisco_ios", "E Building", "E1 IDF", "E1-IDF", "WS-C3650-48PD"),
-    ("10.5.1.12", "cisco_ios", "E Building", "E2 IDF", "E2-IDF", "WS-C3650-48PD"),
-    ("10.5.1.13", "cisco_ios", "E Building", "E3 IDF", "E3-IDF", "C9300-48P"),
-    ("10.0.1.11", "cisco_ios", "M Building", "M1 IDF", "M1-IDF", "C9300-48P"),
+DOMAIN = ".lgcc.example.edu"
+
+# name, ip, building, location, model, os, type, on the switch list
+DEVICES = [
+    ("CORE-1", "10.0.0.1", "M Building", "Main MDF", "N7K-C7010", "nxos", "network"),
+    ("CORE-2", "10.0.0.2", "M Building", "Main MDF", "N7K-C7010", "nxos", "network"),
+    ("FW-1", "10.0.0.5", "M Building", "Main MDF", "ASA5525", "asa", "firewall"),
+    ("B-DIST", "10.2.0.1", "B Building", "B MDF", "WS-C4507R+E", "ios", "network"),
+    ("C-DIST-1", "10.3.0.1", "C Building", "C MDF", "C9500-24Y4C", "iosxe", "network"),
+    ("C-DIST-2", "10.3.0.2", "C Building", "C MDF", "C9500-24Y4C", "iosxe", "network"),
+    ("E-DIST", "10.5.0.1", "E Building", "E MDF", "WS-C4507R+E", "ios", "network"),
+    ("M1-IDF", "10.0.1.11", "M Building", "M1 IDF", "C9300-48P", "iosxe", "network"),
+    ("VMHOST-1", "10.3.9.10", "C Building", "C MDF", "VMware ESXi", "vmware", "server"),
 ]
-REFUSES_LOGIN = {"10.2.1.15"}
-
-# (switch A, port on A, switch B, port on B, how: "cdp" both ends, "lldp" both ends)
-LINKS = [
-    ("CORE-1", "Ethernet1/1", "CORE-2", "Ethernet1/1", "cdp"),
-    ("CORE-1", "Ethernet1/2", "CORE-2", "Ethernet1/2", "cdp"),
-    ("CORE-1", "Ethernet2/1", "B-DIST", "TenGigabitEthernet1/1", "cdp"),
-    ("CORE-2", "Ethernet2/1", "B-DIST", "TenGigabitEthernet2/1", "cdp"),
-    ("CORE-1", "Ethernet2/2", "C-DIST-1", "TenGigabitEthernet1/0/1", "cdp"),
-    ("CORE-2", "Ethernet2/2", "C-DIST-1", "TenGigabitEthernet1/0/2", "cdp"),
-    ("CORE-1", "Ethernet2/3", "C-DIST-2", "TenGigabitEthernet1/0/1", "cdp"),
-    ("CORE-2", "Ethernet2/3", "C-DIST-2", "TenGigabitEthernet1/0/2", "cdp"),
-    ("C-DIST-1", "TenGigabitEthernet1/0/24", "C-DIST-2", "TenGigabitEthernet1/0/24", "cdp"),
-    ("CORE-1", "Ethernet2/4", "E-DIST", "TenGigabitEthernet1/1", "cdp"),
-    ("CORE-2", "Ethernet2/4", "E-DIST", "TenGigabitEthernet2/1", "cdp"),
-    ("CORE-1", "Ethernet3/1", "M1-IDF", "TenGigabitEthernet1/1/1", "cdp"),
-    ("B-DIST", "GigabitEthernet3/1", "B1-IDF", "TenGigabitEthernet1/1/1", "cdp"),
-    ("B-DIST", "GigabitEthernet3/3", "B3-IDF", "GigabitEthernet1/0/49", "cdp"),
-    ("B3-IDF", "GigabitEthernet1/0/50", "B3-IDF-2", "GigabitEthernet1/0/49", "cdp"),
-    ("B-DIST", "GigabitEthernet3/5", "B4-IDF", "TenGigabitEthernet1/1/1", "cdp"),
-    ("C-DIST-1", "TenGigabitEthernet1/0/5", "C1-IDF", "TenGigabitEthernet1/1/1", "cdp"),
-    ("C-DIST-2", "TenGigabitEthernet1/0/5", "C1-IDF", "TenGigabitEthernet2/1/1", "cdp"),
-    ("C-DIST-1", "TenGigabitEthernet1/0/6", "C2-IDF", "TenGigabitEthernet1/1/1", "cdp"),
-    ("C-DIST-2", "TenGigabitEthernet1/0/6", "C2-IDF", "TenGigabitEthernet2/1/1", "cdp"),
-    ("C-DIST-1", "TenGigabitEthernet1/0/7", "C3-IDF", "TenGigabitEthernet1/1/1", "cdp"),
-    ("C-DIST-2", "TenGigabitEthernet1/0/7", "C3-IDF", "TenGigabitEthernet1/1/2", "cdp"),
-    ("C-DIST-1", "GigabitEthernet1/0/8", "C4-IDF", "GE0/0/47", "lldp"),
-    ("E-DIST", "GigabitEthernet3/1", "E1-IDF", "GigabitEthernet1/1/1", "cdp"),
-    ("E-DIST", "GigabitEthernet3/2", "E2-IDF", "GigabitEthernet1/1/1", "cdp"),
-    ("E-DIST", "GigabitEthernet3/3", "E3-IDF", "TenGigabitEthernet1/1/1", "cdp"),
-]
-# Not on the list: seen by CDP from the cores
-EDGE = [("CORE-1", "Ethernet4/1", "GigabitEthernet0/0/0"), ("CORE-2", "Ethernet4/1", "GigabitEthernet0/0/1")]
-DELL = "B2-IDF"
-DELL_UPLINK = ("B-DIST", "GigabitEthernet3/2")           # nothing reports this link
+CLOSETS = {   # building: (distribution switch(es), how many closets)
+    "B": (["B-DIST"], 6),
+    "C": (["C-DIST-1", "C-DIST-2"], 8),
+    "E": (["E-DIST"], 10),
+}
+DOWN = {"B4-IDF"}
 
 
-def _info():
-    return {s[4]: {"address": s[0], "type": s[1], "building": s[2], "location": s[3], "model": s[5]}
-            for s in SWITCHES}
+def _closets():
+    out = []
+    for b, (_, count) in CLOSETS.items():
+        for i in range(1, count + 1):
+            name = f"{b}{i}-IDF"
+            model = ("PowerConnect 5548P" if name == "B2-IDF" else "ArubaS3500-48P" if name == "C4-IDF"
+                     else "WS-C2960X-48FPD-L" if b == "B" else "WS-C3650-48PD" if b == "E" and i % 2 else "C9300-48P")
+            os_ = "powerconnect" if "Power" in model else "arubaos" if "Aruba" in model else "ios"
+            out.append((name, f"10.{ {'B': 2, 'C': 3, 'E': 5}[b]}.1.{10 + i}", f"{b} Building", f"{b}{i} IDF", model, os_,
+                        "network"))
+    out.append(("B3-IDF-2", "10.2.1.30", "B Building", "B3 IDF", "WS-C2960X-48FPD-L", "ios", "network"))
+    return out
 
 
-def _mac(n):
-    return f"00:1a:2b:00:{n // 256:02x}:{n % 256:02x}"
+def demo_observium():
+    """{"devices", "ports", "neighbours"} as network.read_observium returns them."""
+    rows = DEVICES + _closets()
+    devices, ids = [], {}
+    for n, (name, ip, _, loc, model, os_, kind) in enumerate(rows, start=1):
+        ids[name] = n
+        devices.append({"device_id": n, "hostname": (name.lower() + DOMAIN) if name.startswith("CORE") else ip,
+                        "sysName": name + DOMAIN, "ip": ip, "hardware": model, "os": os_, "type": kind,
+                        "location": f"LaGuardia, {loc}", "status": 0 if name in DOWN else 1, "disabled": 0,
+                        "ignore": 0})
+    ports, neighbours = {}, []
+
+    def port(device, name, descr=None):
+        pid = len(ports) + 1
+        ports[pid] = {"port_id": pid, "device_id": ids[device], "ifName": name, "ifDescr": descr or name,
+                      "ifAlias": ""}
+        return pid
+
+    def link(a, pa, b, pb, protocol="cdp", both=True):
+        """Observium records a link from each end that reports it."""
+        ia, ib = port(a, pa), port(b, pb)
+        neighbours.append(_row(ids[a], ia, protocol, ib, b, pb))
+        if both:
+            neighbours.append(_row(ids[b], ib, protocol, ia, a, pa))
+
+    link("CORE-1", "Eth1/1", "CORE-2", "Eth1/1")
+    link("CORE-1", "Eth1/2", "CORE-2", "Eth1/2")
+    link("CORE-1", "Eth4/1", "FW-1", "Gi0/0", "lldp")
+    link("CORE-2", "Eth4/1", "FW-1", "Gi0/1", "lldp")
+    link("CORE-1", "Eth3/1", "M1-IDF", "Te1/1/1")
+    for n, dist in enumerate(["B-DIST", "C-DIST-1", "C-DIST-2", "E-DIST"], start=1):
+        link("CORE-1", f"Eth2/{n}", dist, "Te1/1" if "4507" in devices[ids[dist] - 1]["hardware"] else "Te1/0/1")
+        link("CORE-2", f"Eth2/{n}", dist, "Te2/1" if "4507" in devices[ids[dist] - 1]["hardware"] else "Te1/0/2")
+    link("C-DIST-1", "Te1/0/24", "C-DIST-2", "Te1/0/24")
+    for b, (dists, count) in CLOSETS.items():
+        for i in range(1, count + 1):
+            closet = f"{b}{i}-IDF"
+            for d, dist in enumerate(dists):
+                here = f"Gi3/{i}" if "4507" in devices[ids[dist] - 1]["hardware"] else f"Te1/0/{4 + i}"
+                there = "GE0/0/47" if closet == "C4-IDF" else "gi1/0/49" if closet == "B2-IDF" else f"Te{d + 1}/1/1"
+                if closet == "C4-IDF" and d == 1:
+                    continue                                      # the Aruba has one uplink
+                if closet == "B2-IDF":                            # only the Dell reports this one (by LLDP)
+                    link(closet, there, dist, here, "lldp", both=False)
+                elif closet == "C4-IDF":
+                    link(dist, here, closet, there, "lldp")
+                else:
+                    link(dist, here, closet, there)
+    link("B3-IDF", "Gi1/0/50", "B3-IDF-2", "Gi1/0/49")
+    link("C-DIST-1", "Te1/0/20", "VMHOST-1", "vmnic0", "cdp")
+    # Neighbours Observium doesn't monitor: the edge router (kept), a phone and an access point (left out)
+    for core, p, far in (("CORE-1", "Eth5/1", "Gi0/0/0"), ("CORE-2", "Eth5/1", "Gi0/0/1")):
+        neighbours.append(_row(ids[core], port(core, p), "cdp", None, "INET-RTR-1" + DOMAIN, far,
+                               "cisco ISR4451-X/K9", "Cisco IOS XE Software, Version 17.03.04a", "10.255.0.1"))
+    neighbours.append(_row(ids["E3-IDF"], port("E3-IDF", "Gi1/0/1"), "cdp", None, "SEP00112233AA01", "Port 1",
+                           "Cisco IP Phone 8845", "sip88xx.14-1-1", "10.5.40.21"))
+    neighbours.append(_row(ids["E3-IDF"], port("E3-IDF", "Gi1/0/28"), "cdp", None, "AP-E1-28", "GigabitEthernet0",
+                           "cisco AIR-AP2802I-B-K9", "Cisco AP Software", "10.5.60.28"))
+    return {"devices": devices, "ports": ports, "neighbours": neighbours}
 
 
-def _dotted(n):
-    raw = _mac(n).replace(":", "")
-    return f"{raw[0:4]}.{raw[4:8]}.{raw[8:12]}"
-
-
-def _cdp_block(name, ip, platform, caps, local, remote, nxos):
-    if nxos:
-        return (f"----------------------------------------\nDevice ID:{name}(FOX1{abs(hash(name)) % 10**6:06d})\n"
-                f"System Name: {name}\n\nInterface address(es):\n    IPv4 Address: {ip}\n"
-                f"Platform: {platform}, Capabilities: {caps}\n"
-                f"Interface: {local}, Port ID (outgoing port): {remote}\nHoldtime: 151 sec\n")
-    return (f"-------------------------\nDevice ID: {name}.lgcc.example.edu\nEntry address(es): \n"
-            f"  IP address: {ip}\nPlatform: {platform},  Capabilities: {caps}\n"
-            f"Interface: {local},  Port ID (outgoing port): {remote}\nHoldtime : 150 sec\n\n"
-            f"Version :\nCisco IOS Software\n")
-
-
-def _platform(info):
-    if info["type"] == "cisco_nxos":
-        return "N7K-C7010", "Router Switch IGMP Filtering Supports-STP-Dispute"
-    return "cisco " + info["model"], "Router Switch IGMP" if "45" in info["model"] or "95" in info["model"] \
-        else "Switch IGMP"
-
-
-def demo_results():
-    """[{"switch", "outputs", "problem"}] as if every switch on SWITCHES had been read."""
-    info = _info()
-    cdp, lldp = {n: [] for n in info}, {n: [] for n in info}
-    for a, pa, b, pb, how in LINKS:
-        for here, local, there, remote in ((a, pa, b, pb), (b, pb, a, pa)):
-            if how == "cdp":
-                plat, caps = _platform(info[there])
-                cdp[here].append(_cdp_block(there, info[there]["address"], plat, caps, local, remote,
-                                            info[here]["type"] == "cisco_nxos"))
-            else:
-                lldp[here].append((local, there, remote))
-    for core, local, remote in EDGE:
-        cdp[core].append(_cdp_block("INET-RTR-1", "10.255.0.1", "cisco ISR4451-X/K9", "Router IGMP", local, remote,
-                                    True))
-    # Phones and access points the map must leave out
-    cdp["E3-IDF"].append(_cdp_block("SEP00112233AA01", "10.5.40.21", "Cisco IP Phone 8845",
-                                    "Host Phone Two-port Mac Relay", "GigabitEthernet1/0/1", "Port 1", False))
-    cdp["E3-IDF"].append(_cdp_block("AP-E1-28", "10.5.60.28", "cisco AIR-AP2802I-B-K9", "Router Trans-Bridge",
-                                    "GigabitEthernet1/0/28", "GigabitEthernet0", False))
-
-    results = []
-    for n, (name, d) in enumerate(info.items(), start=1):
-        switch = {"address": d["address"], "type": d["type"], "protocol": "telnet",
-                  "building": d["building"], "location": d["location"]}
-        if d["address"] in REFUSES_LOGIN:
-            results.append({"switch": switch, "outputs": None,
-                            "problem": "login failed (check the username and password)"})
-            continue
-        out = {"prompt": name}
-        if d["type"] == "cisco_nxos":
-            out["version"] = (f"Cisco Nexus Operating System (NX-OS) Software\n  cisco {d['model']} (10 Slot) Chassis "
-                              f"(\"Supervisor Module-2\")\n  Device name: {name}\n")
-            out["cdp"] = "".join(cdp[name])
-            out["lldp"] = ""
-        elif d["type"] == "cisco_ios":
-            out["version"] = (f"{name} uptime is 1 year, 2 weeks\nModel Number                       : {d['model']}\n"
-                              f"Base Ethernet MAC Address          : {_mac(n)}\n") if not d["model"].startswith("WS-C45") \
-                else (f"{name} uptime is 2 years\ncisco {d['model']} (MPC8572) processor (revision 10) with 4194304K\n")
-            out["cdp"] = "".join(cdp[name])
-            out["lldp"] = "".join(
-                f"------------------------------------------------\nLocal Intf: {local}\nChassis id: {_dotted(99)}\n"
-                f"Port id: {remote}\nPort Description: {remote}\nSystem Name: {there}\n\nSystem Description: \n"
-                f"ArubaOS (MODEL: {info[there]['model']}), Version 7.4.1.9\n\nTime remaining: 98 seconds\n"
-                f"System Capabilities: B,R\nEnabled Capabilities: B\nManagement Addresses:\n"
-                f"    IP: {info[there]['address']}\n" for local, there, remote in lldp[name])
-        elif d["type"] == "dell_powerconnect":
-            out["version"] = (f"System Description:  Dell PowerConnect 5548P\nSystem Name:  {name}\n"
-                              f"System MAC Address:  {_mac(n)}\n")
-            out["lldp"] = ("  Port         Device ID          Port ID          System Name    Capabilities    TTL\n"
-                           "---------  -----------------  ---------------  -------------  --------------  -----\n")
-        else:
-            out["version"] = f"ArubaOS (MODEL: {d['model']}), Version 7.4.1.9\n"
-            out["lldp"] = ("Capability codes: (R)Router, (B)Bridge, (A)Access Point, (P)Phone, (O)Other\n"
-                           "LLDP Neighbor Information\n-------------------------\n"
-                           "Local Intf  Chassis ID         Capability  Remote Intf    Expiry-Time (Secs)  System Name\n"
-                           "----------  ----------         ----------  -----------    ------------------  -----------\n"
-                           + "".join(f"{local:<11} {_mac(200):<18} B:R         {remote:<14} 98                  {there}\n"
-                                     for local, there, remote in lldp[name]))
-        out["macs"], out["arp"] = "", ""
-        results.append({"switch": switch, "outputs": out, "problem": ""})
-
-    # The Dell nobody reports: its MAC is in B-DIST's table on the port it's plugged into
-    by_name = {r["outputs"]["prompt"]: r for r in results if r["outputs"]}
-    dell_n = list(info).index(DELL) + 1
-    dist, port = DELL_UPLINK
-    rows = [f"  99    {_dotted(dell_n)}    dynamic ip,ipx,assigned,other {port}"]
-    rows += [f"  20    {_dotted(1000 + i)}    dynamic ip,ipx,assigned,other {port}" for i in range(30)]
-    rows += [f"  20    {_dotted(2000 + i)}    dynamic ip,ipx,assigned,other GigabitEthernet3/1" for i in range(60)]
-    by_name[dist]["outputs"]["macs"] = "Unicast Entries\n vlan   mac address     type        protocols   port\n" + \
-        "\n".join(rows) + "\n"
-    by_name[dist]["outputs"]["arp"] = (f"Protocol  Address          Age (min)  Hardware Addr   Type   Interface\n"
-                                       f"Internet  {info[DELL]['address']:<16} 3          {_dotted(dell_n)}  ARPA   Vlan99\n")
-    # The core also sees the Dell's MAC, but on its link to B-DIST, so that's not taken as the Dell's port
-    by_name["CORE-1"]["outputs"]["macs"] = (f"*   99     {_dotted(dell_n)}   dynamic  0         F      F    Ethernet2/1\n")
-    return results
+def _row(device_id, port_id, protocol, remote_port_id, remote_hostname, remote_port, platform="", version="",
+         address=""):
+    return {"device_id": device_id, "port_id": port_id, "protocol": protocol, "remote_port_id": remote_port_id,
+            "remote_hostname": remote_hostname if "." in remote_hostname or remote_port_id is None
+            else remote_hostname + DOMAIN, "remote_port": remote_port, "remote_platform": platform,
+            "remote_version": version, "remote_address": address, "active": 1}
 
 
 def demo_switch_list():
-    return [{"address": s[0], "type": s[1], "protocol": "telnet", "building": s[2], "location": s[3]} for s in SWITCHES]
+    """The Port Analyzer switch list for the made-up campus (by IP address, like most lists)."""
+    rows = [r for r in DEVICES if r[6] == "network"] + _closets()
+    return [{"address": ip, "type": "dell_powerconnect" if "Power" in model else "aruba_mas" if "Aruba" in model
+             else "cisco_nxos" if os_ == "nxos" else "cisco_ios", "protocol": "telnet", "building": building,
+             "location": loc} for name, ip, building, loc, model, os_, _ in rows]

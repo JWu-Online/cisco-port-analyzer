@@ -56,6 +56,23 @@
   .btn:hover { border-color: var(--ink-3); }
   .btn.primary { background: var(--action); border-color: var(--action); color: #fff; text-decoration: none; display: inline-block; }
   .zoom { display: flex; gap: 4px; margin-left: auto; }
+  .controls.second { margin-top: -2px; gap: 6px 16px; }
+  .controls .label { font-size: 0.85rem; font-weight: 600; color: var(--ink-3); }
+  .controls .sep { width: 1px; align-self: stretch; background: var(--line); }
+  .focus-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; background: var(--surface);
+               border: 1px solid var(--action); border-left-width: 4px; border-radius: 6px; padding: 8px 12px;
+               margin: 0 0 10px; font-size: 0.92rem; }
+  .group rect.box { fill: var(--surface); stroke: var(--line); }
+  .group rect.behind { fill: var(--surface); stroke: var(--line); }
+  .group .name { font: 600 12.5px var(--sans); fill: var(--ink); }
+  .group .meta { font: 11px var(--sans); fill: var(--action); }
+  .group { cursor: pointer; }
+  .group .stripe { fill: var(--access); }
+  .group:hover rect.box { stroke: var(--link-hot); stroke-width: 2; }
+  .group.hit rect.box { stroke: var(--action); stroke-width: 2.5; }
+  .group.dim { opacity: 0.25; }
+  .fold { font: 600 10.5px var(--sans); fill: var(--action); cursor: pointer; }
+  .fold:hover { text-decoration: underline; }
   .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.85rem; color: var(--ink-2); margin: 0 0 10px; }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
   .legend svg { flex: none; }
@@ -119,7 +136,7 @@
     @page { size: landscape; margin: 10mm; }
     body { background: #fff; font-size: 11px; }
     main { padding: 0; max-width: none; }
-    .controls, .drawer, .tip, .back, .zoom, .totals, .notice { display: none !important; }
+    .controls, .drawer, .tip, .back, .zoom, .totals, .notice, .focus-bar, .fold { display: none !important; }
     * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .sub { margin-bottom: 6px; }
     .map { overflow: visible; max-height: none; min-height: 0; border: 0; break-inside: avoid; }
@@ -134,20 +151,21 @@
 <main>
   <a class="back" href="/network">&larr; Network map</a>
   <h1>Network map</h1>
-  <p class="sub">{{ data.scope }} · drawn {{ data.drawn }} · {{ data.summary.read }} of {{ data.summary.listed }} switches read{% if data.demo %} · <strong>made-up sample</strong>{% endif %}</p>
+  <p class="sub">{{ data.source }} · drawn {{ data.drawn }} · {{ data.summary.listed }} devices{% if data.summary.read < data.summary.listed %}, {{ data.summary.listed - data.summary.read }} down{% endif %}{% if data.demo %} · <strong>made-up sample</strong>{% endif %}</p>
 
   <div class="totals">
     <div class="total"><div class="total-label"><span class="sw core"></span>Core</div><div class="total-value" id="t-core">{{ data.summary.layers.core }}</div><div class="total-note">fast backbone between buildings</div></div>
     <div class="total"><div class="total-label"><span class="sw distribution"></span>Distribution</div><div class="total-value" id="t-distribution">{{ data.summary.layers.distribution }}</div><div class="total-note">joins a building's closets to the core</div></div>
     <div class="total"><div class="total-label"><span class="sw access"></span>Access</div><div class="total-value" id="t-access">{{ data.summary.layers.access }}</div><div class="total-note">where people and devices plug in</div></div>
-    <div class="total"><div class="total-label">Links</div><div class="total-value">{{ data.summary.links }}</div><div class="total-note">{{ data.summary.other }} device(s) not on your list</div></div>
+    <div class="total"><div class="total-label">Links</div><div class="total-value">{{ data.summary.links }}</div><div class="total-note">{{ data.summary.other }} neighbour(s) Observium doesn't monitor</div></div>
   </div>
   {% for w in data.warnings %}<p class="notice">{{ w }}</p>{% endfor %}
 
   <div class="controls">
     <label>Building <select id="building"><option value="">All buildings</option></select></label>
-    <input type="search" id="q" placeholder="Find a switch, address or model" aria-label="Find a switch">
-    <label><input type="checkbox" id="others" checked> Devices not on your list</label>
+    <label>Distribution switch <select id="dist"><option value="">All</option></select></label>
+    <input type="search" id="q" list="names" placeholder="Find a switch, then press Enter" aria-label="Find a switch">
+    <datalist id="names"></datalist>
     <div class="zoom">
       <button type="button" class="btn" id="z-out" aria-label="Zoom out">&minus;</button>
       <button type="button" class="btn" id="z-fit">Fit</button>
@@ -155,15 +173,28 @@
       <button type="button" class="btn" id="print">Print / Save PDF</button>
     </div>
   </div>
+  <div class="controls second">
+    <span class="label">Show</span>
+    <label><input type="checkbox" class="show-layer" value="core" checked> Core</label>
+    <label><input type="checkbox" class="show-layer" value="distribution" checked> Distribution</label>
+    <label><input type="checkbox" class="show-layer" value="access" checked> Access</label>
+    <span class="sep"></span>
+    <label><input type="checkbox" id="collapse"> Collapse closets</label>
+    <label><input type="checkbox" id="others" checked> Neighbours Observium doesn't monitor</label>
+  </div>
+  <div class="focus-bar" id="focus-bar" hidden>
+    <span id="focus-text"></span>
+    <button type="button" class="btn" id="focus-clear">Show everything</button>
+  </div>
   <div class="legend">
     <span><span class="sw core"></span>Core</span>
     <span><span class="sw distribution"></span>Distribution</span>
     <span><span class="sw access"></span>Access</span>
     <span><svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" class="edge"/></svg>link (CDP or LLDP)</span>
     <span><svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" class="edge thick"/></svg>2 or more links</span>
-    <span><svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" class="edge mac"/></svg>found by MAC address</span>
-    <span><svg width="34" height="16"><rect x="1" y="1" width="32" height="14" rx="3" fill="none" stroke="currentColor" stroke-dasharray="4 3"/></svg>not on your list</span>
-    <span><svg width="14" height="14"><circle cx="7" cy="7" r="6" class="bad" fill="#B42318"/></svg>couldn't log in</span>
+    <span><svg width="34" height="16"><rect x="1" y="1" width="32" height="14" rx="3" fill="none" stroke="currentColor" stroke-dasharray="4 3"/></svg>not monitored by Observium</span>
+    <span><svg width="14" height="14"><circle cx="7" cy="7" r="6" class="bad" fill="#B42318"/></svg>down in Observium</span>
+    <span><svg width="38" height="18"><rect x="5" y="1" width="32" height="12" rx="3" fill="none" stroke="currentColor" opacity=".5"/><rect x="1" y="5" width="32" height="12" rx="3" fill="var(--surface)" stroke="currentColor"/></svg>closets, collapsed (click to open)</span>
   </div>
 
   <div class="map" id="map"></div>
@@ -202,7 +233,9 @@
   var byId = {};
   D.nodes.forEach(function (n) { byId[n.id] = n; });
   var overrides = null;                  // from the app: the layers people picked (null = use what was drawn)
-  var state = { building: "", q: "", others: true, zoom: 1, picked: null };
+  var state = { building: "", dist: "", q: "", others: true, zoom: 1, picked: null, focus: null,
+                show: { core: true, distribution: true, access: true },
+                collapse: D.nodes.filter(function (n) { return n.layer === "access"; }).length > 30, open: {} };
   var current = null;                    // the last layout
 
   function layerOf(n) {
@@ -228,9 +261,37 @@
   }
 
   // ---------------------------------------------------------------- what's shown
+  function neighbours(id) {
+    var out = [];
+    D.links.forEach(function (l) { if (l.a === id) out.push(l.b); else if (l.b === id) out.push(l.a); });
+    return out;
+  }
   function visible() {
-    var nodes = D.nodes.filter(function (n) { return state.others || n.listed; });
-    if (state.building) {
+    var nodes = D.nodes.filter(function (n) { return (state.others || n.listed) && state.show[layerOf(n)]; });
+    if (state.focus && byId[state.focus]) {
+      // One switch and everything it's plugged into
+      var near = {};
+      near[state.focus] = true;
+      neighbours(state.focus).forEach(function (m) { near[m] = true; });
+      nodes = D.nodes.filter(function (n) { return near[n.id] && (state.others || n.listed || n.id === state.focus); });
+    } else if (state.dist && byId[state.dist]) {
+      // A distribution switch (and its partner), the core above it and the closets below it
+      var keep = {}, queue = [state.dist];
+      keep[state.dist] = true;
+      neighbours(state.dist).forEach(function (m) {
+        if (layerOf(byId[m]) === "distribution" && byId[m].building === byId[state.dist].building) { keep[m] = true; queue.push(m); }
+      });
+      var dists = queue.slice();
+      while (queue.length) {
+        neighbours(queue.shift()).forEach(function (m) {
+          if (!keep[m] && layerOf(byId[m]) === "access") { keep[m] = true; queue.push(m); }
+        });
+      }
+      dists.forEach(function (d) {
+        neighbours(d).forEach(function (m) { if (layerOf(byId[m]) === "core") keep[m] = true; });
+      });
+      nodes = nodes.filter(function (n) { return keep[n.id]; });
+    } else if (state.building) {
       var keep = {};
       nodes.forEach(function (n) { if (n.building === state.building) keep[n.id] = true; });
       // the switches above them, so the building hangs off its distribution and core
@@ -301,8 +362,10 @@
       heads.forEach(walk);
       c.members.slice().sort(function (a, b) { return natural(byId[a].name, byId[b].name); }).forEach(walk);
       c.members = order;
-      var cols = Math.ceil(order.length / MAX_ROWS);
-      c.rows = Math.ceil(order.length / cols);
+      c.collapsed = state.collapse && !state.focus && !state.open[k] && order.length > 1;
+      var shown = c.collapsed ? 1 : order.length;
+      var cols = Math.ceil(shown / MAX_ROWS);
+      c.rows = Math.ceil(shown / cols);
       c.cols = cols;
       c.width = cols * W + (cols - 1) * COL_GAP;
     });
@@ -356,7 +419,8 @@
         c.x = cx;
         c.busY = yBus - k * step;              // each closet group gets its own bus, so they don't merge
         c.viaCore = !!f.core;
-        c.members.forEach(function (id, i) {
+        if (c.collapsed) c.group = { id: "group:" + c.key, x: cx, y: yAccess };
+        else c.members.forEach(function (id, i) {
           var col = Math.floor(i / c.rows), row = i % c.rows;
           pos[id] = { x: cx + col * (W + COL_GAP), y: yAccess + row * (H + ROW_GAP), col: col };
         });
@@ -438,6 +502,7 @@
       }
       handled[l.a + "|" + l.b] = true;
       var pa = P[l.a], pb = P[l.b], d;
+      if (!pa || !pb) return;
       if (pa.y === pb.y) {
         var left = pa.x < pb.x ? pa : pb, right = pa.x < pb.x ? pb : pa;
         if (right.x - left.x <= W + GAP + 1) d = "M" + (left.x + W) + "," + (left.y + H / 2) + " L" + right.x + "," + (right.y + H / 2);
@@ -457,11 +522,25 @@
     });
 
     // Closets: a bus under the switches they hang off, a spine down each column, a tick to each switch
+    var groups = [];
     Object.keys(L.clusters).forEach(function (k) {
       var c = L.clusters[k];
       var everyone = c.members.concat(c.attach);
       var cols = {};
-      c.members.forEach(function (id) { (cols[P[id].col] = cols[P[id].col] || []).push(id); });
+      if (c.collapsed) {
+        // The whole closet group as one box: drawn with the switches, joined like one switch
+        P[c.group.id] = { x: c.group.x, y: c.group.y, col: 0 };
+        cols[0] = [c.group.id];
+        groups.push(c);
+      } else {
+        c.members.forEach(function (id) { (cols[P[id].col] = cols[P[id].col] || []).push(id); });
+        if (state.collapse && !state.focus && c.members.length > 1) {
+          var fold = svg("text", { x: c.x + c.width, y: L.rows.access - 7, "text-anchor": "end", "class": "fold",
+                                   role: "button", tabindex: 0 }, edges);
+          fold.textContent = "▴ Collapse";
+          fold.addEventListener("click", function () { state.open[c.key] = false; draw(); });
+        }
+      }
       var spineXs = Object.keys(cols).map(function (col) { return c.x + Number(col) * (W + COL_GAP) - 12; });
       var busY = c.busY;
       if (c.attach.length) {
@@ -484,21 +563,25 @@
       }
       Object.keys(cols).forEach(function (col, i) {
         var ids = cols[col], sx = spineXs[i];
-        var onBus = ids.filter(function (id) { return L.adj[id].some(function (x) { return c.attach.indexOf(x) !== -1; }); });
+        var onBus = ids.filter(function (id) {
+          return c.collapsed || L.adj[id].some(function (x) { return c.attach.indexOf(x) !== -1; });
+        });
         if (onBus.length && c.attach.length) {
           var last = Math.max.apply(null, onBus.map(function (id) { return P[id].y; }));
           line("M" + sx + "," + busY + " L" + sx + "," + (last + H / 2), "edge", everyone);
         }
         ids.forEach(function (id) {
+          var mine = c.collapsed ? c.members : [id];
           var ups = view.links.filter(function (l) {
-            var other = l.a === id ? l.b : l.b === id ? l.a : null;
-            return other && c.attach.indexOf(other) !== -1;
+            var me = mine.indexOf(l.a) !== -1 ? l.a : mine.indexOf(l.b) !== -1 ? l.b : null;
+            var other = me === l.a ? l.b : l.a;
+            return me && c.attach.indexOf(other) !== -1;
           });
           if (!ups.length || !c.attach.length) return;
           var cls = "edge" + (ups.every(function (l) { return l.mac; }) ? " mac" : "") +
                     (ups.some(function (l) { return l.pairs.length > 1; }) ? " thick" : "");
           var y = P[id].y + H / 2;
-          line("M" + sx + "," + y + " L" + P[id].x + "," + y, cls, [id].concat(ups.map(function (l) { return l.a === id ? l.b : l.a; })), ups[0]);
+          line("M" + sx + "," + y + " L" + P[id].x + "," + y, cls, mine.concat(c.attach), c.collapsed ? null : ups[0]);
         });
       });
     });
@@ -508,6 +591,7 @@
       var a = byId[l.a], b = byId[l.b];
       if (!(layerOf(a) === "access" && layerOf(b) === "access")) return;
       var pa = P[l.a], pb = P[l.b];
+      if (!pa || !pb) return;                                                   // inside a collapsed group
       var top = pa.y <= pb.y ? pa : pb, bot = pa.y <= pb.y ? pb : pa;
       var d;
       if (top.x === bot.x) {
@@ -521,9 +605,35 @@
       line(d, linkClass(l), [l.a, l.b], l);
     });
 
+    // Collapsed closet groups
+    groups.forEach(function (c) {
+      var p = P[c.group.id], n = c.members.length;
+      var g = svg("g", { transform: "translate(" + p.x + "," + p.y + ")", "class": "group", tabindex: 0, role: "button",
+                         "aria-label": n + " closet switches, click to show them" }, nodesG);
+      g.dataset.members = c.members.join(" ");
+      svg("rect", { x: 8, y: -8, width: W, height: H, rx: 6, "class": "behind" }, g);
+      svg("rect", { x: 4, y: -4, width: W, height: H, rx: 6, "class": "behind" }, g);
+      svg("rect", { width: W, height: H, rx: 6, "class": "box" }, g);
+      svg("rect", { width: 5, height: H - 2, x: 1, y: 1, rx: 2, "class": "stripe access" }, g);
+      var down = c.members.filter(function (id) { return !byId[id].read; }).length;
+      var name = svg("text", { x: 14, y: 19, "class": "name" }, g);
+      name.textContent = n + " closet switches" + (down ? " (" + down + " down)" : "");
+      var buildings = {};
+      c.members.forEach(function (id) { if (byId[id].building) buildings[byId[id].building] = true; });
+      var meta = svg("text", { x: 14, y: 36, "class": "meta" }, g);
+      meta.textContent = clip((Object.keys(buildings).join(", ") || "Closets") + " · click to open", 30);
+      g.addEventListener("mouseenter", function (e) { hot(c.members); tipGroup(e, c); });
+      g.addEventListener("mousemove", moveTip);
+      g.addEventListener("mouseleave", function () { hot(null); hideTip(); });
+      function open() { state.open[c.key] = true; draw(); }
+      g.addEventListener("click", open);
+      g.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+    });
+
     // Switches
     view.nodes.forEach(function (n) {
       var p = P[n.id], layer = layerOf(n);
+      if (!p) return;                                                           // inside a collapsed group
       var g = svg("g", { transform: "translate(" + p.x + "," + p.y + ")", "class": "node" + (n.listed ? "" : " other"),
                          tabindex: 0, role: "button", "aria-label": n.name + ", " + NAMES[layer] }, nodesG);
       g.dataset.id = n.id;
@@ -533,7 +643,7 @@
       name.textContent = clip(n.name, 21);
       var meta = svg("text", { x: 14, y: 36, "class": "meta" }, g);
       meta.textContent = clip(n.listed ? [n.location || n.building, n.model].filter(Boolean).join(" · ")
-                                       : "Not on your list" + (n.model ? " · " + n.model : ""), 29);
+                                       : "Not in Observium" + (n.model ? " · " + n.model : ""), 29);
       if (n.listed && !n.read) {
         svg("circle", { cx: W - 12, cy: 12, r: 7, "class": "bad" }, g);
         var t = svg("text", { x: W - 12, y: 16, "class": "bad-text", "text-anchor": "middle" }, g);
@@ -553,25 +663,31 @@
   function hot(id) {
     var svgEl = document.querySelector("#map svg");
     if (!svgEl) return;
-    var near = {};
-    if (id) { near[id] = true; (current.adj[id] || []).forEach(function (m) { near[m] = true; }); }
+    var ids = id ? [].concat(id) : [], near = {};
+    ids.forEach(function (x) { near[x] = true; (current.adj[x] || []).forEach(function (m) { near[m] = true; }); });
     svgEl.querySelectorAll(".edge").forEach(function (e) {
       var ends = (e.dataset.ends || "").split(" ");
-      var on = id && ends.indexOf(id) !== -1;
-      e.classList.toggle("hot", !!on);
-      e.classList.toggle("faint", !!id && !on);
+      var on = ids.some(function (x) { return ends.indexOf(x) !== -1; });
+      e.classList.toggle("hot", on);
+      e.classList.toggle("faint", ids.length > 0 && !on);
     });
     svgEl.querySelectorAll(".node").forEach(function (g) {
-      g.classList.toggle("hot", !!id && g.dataset.id === id);
-      if (!state.q) g.classList.toggle("dim", !!id && !near[g.dataset.id]);
+      g.classList.toggle("hot", ids.indexOf(g.dataset.id) !== -1);
+      if (!state.q) g.classList.toggle("dim", ids.length > 0 && !near[g.dataset.id]);
     });
+  }
+  function matches(n, q) {
+    return [n.name, n.address, n.model, n.building, n.location, n.obs_location].join(" ").toLowerCase().indexOf(q) !== -1;
   }
   function search() {
     var q = state.q.trim().toLowerCase();
     document.querySelectorAll("#map .node").forEach(function (g) {
-      var n = byId[g.dataset.id];
-      var hay = [n.name, n.address, n.model, n.building, n.location].join(" ").toLowerCase();
-      var match = q && hay.indexOf(q) !== -1;
+      var match = q && matches(byId[g.dataset.id], q);
+      g.classList.toggle("hit", !!match);
+      g.classList.toggle("dim", !!q && !match);
+    });
+    document.querySelectorAll("#map .group").forEach(function (g) {     // a match inside a collapsed group
+      var match = q && g.dataset.members.split(" ").some(function (id) { return matches(byId[id], q); });
       g.classList.toggle("hit", !!match);
       g.classList.toggle("dim", !!q && !match);
     });
@@ -598,14 +714,29 @@
     tip.appendChild(el("div", "muted", [n.address, n.model, [n.building, n.location].filter(Boolean).join(", ")].filter(Boolean).join(" · ")));
     var layer = layerOf(n);
     tip.appendChild(el("div", null, NAMES[layer] + (layer !== n.layer_auto ? " (you set this)" : "")));
-    if (n.listed && !n.read) tip.appendChild(el("div", "problem", "Couldn't log in: " + (n.problem || "no answer")));
-    if (!n.listed) tip.appendChild(el("div", "muted", "Not on your switch list"));
+    if (n.listed && !n.read) tip.appendChild(el("div", "problem", n.problem || "Down"));
+    if (!n.listed) tip.appendChild(el("div", "muted", "Not monitored by Observium"));
     var ports = portList(n.id), ul = el("ul");
     ports.slice(0, 10).forEach(function (p) {
       ul.appendChild(el("li", null, (p.here || "?") + " → " + p.other.name + (p.there ? " " + p.there : "")));
     });
     if (ports.length > 10) ul.appendChild(el("li", "muted", "and " + (ports.length - 10) + " more"));
     if (ports.length) tip.appendChild(ul);
+    tip.hidden = false;
+    moveTip(e);
+  }
+  function tipGroup(e, c) {
+    tip.textContent = "";
+    tip.appendChild(el("strong", null, c.members.length + " closet switches"));
+    tip.appendChild(el("div", "muted", "Hanging off " + c.attach.map(function (id) { return byId[id].name; }).join(" and ")));
+    var ul = el("ul");
+    c.members.slice(0, 12).forEach(function (id) {
+      var n = byId[id];
+      ul.appendChild(el("li", null, n.name + (n.location ? " · " + n.location : "") + (n.read ? "" : " (down)")));
+    });
+    if (c.members.length > 12) ul.appendChild(el("li", "muted", "and " + (c.members.length - 12) + " more"));
+    tip.appendChild(ul);
+    tip.appendChild(el("div", "muted", "Click to show them."));
     tip.hidden = false;
     moveTip(e);
   }
@@ -636,18 +767,20 @@
     state.picked = id;
     mark(id);
     document.getElementById("d-title").textContent = n.name;
-    document.getElementById("d-sub").textContent = n.listed ? NAMES[layerOf(n)] + " switch" : "Not on your switch list";
+    document.getElementById("d-sub").textContent = (n.listed ? NAMES[layerOf(n)] : "Not monitored by Observium") +
+      (n.kind && n.kind !== "network" ? " · " + n.kind : "");
     var prob = document.getElementById("d-problem");
     prob.hidden = !(n.listed && !n.read);
-    prob.textContent = "Couldn't log in: " + (n.problem || "no answer") + ". Drawn where its neighbors say it is.";
+    prob.textContent = (n.problem || "Down") + ".";
     var dl = document.getElementById("d-facts");
     dl.textContent = "";
     fact(dl, "Address", n.address);
     fact(dl, "Model", n.model);
-    fact(dl, "Type", n.type_name);
+    fact(dl, "OS", n.os);
     fact(dl, "Building", n.building);
     fact(dl, "Location", n.location);
-    fact(dl, "Links", String(linksOf(id).length) + " switch(es)/router(s)");
+    if (n.obs_location && n.obs_location !== n.location) fact(dl, "In Observium", n.obs_location);
+    fact(dl, "Links", String(linksOf(id).length));
 
     var sel = document.getElementById("d-layer");
     sel.textContent = "";
@@ -665,10 +798,22 @@
 
     var actions = document.getElementById("d-actions");
     actions.textContent = "";
-    if (SERVED && n.listed && (n.type === "cisco_ios" || n.type === "dell_powerconnect") && !D.demo) {
+    var only = el("button", "btn", "Show only this and its links");
+    only.type = "button";
+    only.addEventListener("click", function () { focusOn(id); });
+    actions.appendChild(only);
+    if (SERVED && n.on_list && (n.list_type === "cisco_ios" || n.list_type === "dell_powerconnect") && !D.demo) {
       var a = el("a", "btn primary", "Draw this stack");
-      a.href = "/topology?address=" + encodeURIComponent(n.address);
+      a.href = "/topology?address=" + encodeURIComponent(n.list_address);
+      actions.appendChild(document.createTextNode(" "));
       actions.appendChild(a);
+    }
+    if (D.web && n.observium_id) {
+      var o = el("a", "btn", "Open in Observium");
+      o.href = D.web.replace(/\/+$/, "") + "/device/device=" + encodeURIComponent(n.observium_id) + "/";
+      o.target = "_blank"; o.rel = "noopener";
+      actions.appendChild(document.createTextNode(" "));
+      actions.appendChild(o);
     }
 
     var body = document.getElementById("d-links");
@@ -716,6 +861,7 @@
     LAYERS.forEach(function (l) {
       document.getElementById("t-" + l).textContent = D.nodes.filter(function (n) { return layerOf(n) === l; }).length;
     });
+    distOptions();
   }
 
   // ---------------------------------------------------------------- controls
@@ -723,9 +869,60 @@
   D.nodes.forEach(function (n) { if (n.building) buildings[n.building] = true; });
   var bsel = document.getElementById("building");
   Object.keys(buildings).sort(natural).forEach(function (b) { var o = el("option", null, b); o.value = b; bsel.appendChild(o); });
-  bsel.addEventListener("change", function () { state.building = bsel.value; draw(); fit(); });
-  document.getElementById("q").addEventListener("input", function () { state.q = this.value; search(); });
-  document.getElementById("others").addEventListener("change", function () { state.others = this.checked; draw(); });
+  var dsel = document.getElementById("dist");
+  function distOptions() {
+    var keep = dsel.value;
+    while (dsel.options.length > 1) dsel.remove(1);
+    D.nodes.filter(function (n) { return layerOf(n) === "distribution" && (!state.building || n.building === state.building); })
+      .sort(function (a, b) { return natural(a.building, b.building) || natural(a.name, b.name); })
+      .forEach(function (n) {
+        var o = el("option", null, n.name + (n.building && !state.building ? " (" + n.building + ")" : ""));
+        o.value = n.id; dsel.appendChild(o);
+      });
+    dsel.value = Array.prototype.some.call(dsel.options, function (o) { return o.value === keep; }) ? keep : "";
+    state.dist = dsel.value;
+  }
+  var names = document.getElementById("names");
+  D.nodes.slice().sort(function (a, b) { return natural(a.name, b.name); }).forEach(function (n) {
+    var o = el("option"); o.value = n.name; names.appendChild(o);
+  });
+  function refresh() { state.picked = null; drawer.hidden = true; draw(); fit(); if (state.zoom < 0.55) zoomTo(0.55); }
+  function focusOn(id) {
+    state.focus = id;
+    var n = byId[id];
+    document.getElementById("focus-text").textContent = "Showing " + n.name + " and the " + neighbours(id).length +
+      " device(s) it's linked to.";
+    document.getElementById("focus-bar").hidden = false;
+    refresh();
+    openPanel(id);
+  }
+  document.getElementById("focus-clear").addEventListener("click", function () {
+    state.focus = null;
+    document.getElementById("focus-bar").hidden = true;
+    refresh();
+  });
+  bsel.addEventListener("change", function () { state.building = bsel.value; distOptions(); refresh(); });
+  dsel.addEventListener("change", function () { state.dist = dsel.value; refresh(); });
+  var q = document.getElementById("q");
+  q.addEventListener("input", function () { state.q = this.value; search(); });
+  function focusSearch() {
+    var text = q.value.trim().toLowerCase();
+    if (!text) return;
+    var exact = D.nodes.filter(function (n) { return n.name.toLowerCase() === text; })[0];
+    var first = exact || D.nodes.filter(function (n) { return matches(n, text); })[0];
+    if (first) { q.value = ""; state.q = ""; focusOn(first.id); }
+  }
+  q.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); focusSearch(); } });
+  q.addEventListener("change", function () {        // picked from the list of names
+    if (D.nodes.some(function (n) { return n.name === q.value; })) focusSearch();
+  });
+  document.querySelectorAll(".show-layer").forEach(function (box) {
+    box.addEventListener("change", function () { state.show[box.value] = box.checked; refresh(); });
+  });
+  var collapse = document.getElementById("collapse");
+  collapse.checked = state.collapse;
+  collapse.addEventListener("change", function () { state.collapse = collapse.checked; state.open = {}; refresh(); });
+  document.getElementById("others").addEventListener("change", function () { state.others = this.checked; refresh(); });
   function zoomTo(z) {
     state.zoom = Math.max(0.2, Math.min(2, z));
     var s = document.querySelector("#map svg");
@@ -741,6 +938,7 @@
   document.getElementById("z-fit").addEventListener("click", fit);
   document.getElementById("print").addEventListener("click", function () { window.print(); });
 
+  distOptions();
   draw();
   fit();
   if (state.zoom < 0.55) zoomTo(0.55);        // a big network: readable, scroll around (Fit shows it all)
