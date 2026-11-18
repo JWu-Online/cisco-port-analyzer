@@ -143,6 +143,21 @@ Each row has: Switch (its name), Address, Building, Location, Member/slot, Port,
 
 The CSVs are saved in `data\docs\<date-time>\`, and earlier runs stay listed on the page. They open straight in Excel. A description starting with `=`, `+`, `-` or `@` gets a `'` in front so Excel shows it as text instead of running it.
 
+## Network map
+
+Click **Network map** at the top of the page to draw every switch on your list in Cisco's three-layer model: **core** at the top, **distribution** in the middle, **access** at the bottom with each building's closets hanging off the distribution switches they're plugged into. Enter the login like on the main page and click **Draw the map**; each switch is logged into once, several at a time. The map opens in a new tab and is saved in `data\network\pages\`, so earlier maps stay listed. **See a made-up campus** shows what one looks like without logging in anywhere.
+
+On the map:
+- **Hover** a switch to light up its links and see its ports; hover a line to see the ports at each end.
+- **Click** a switch for its address, model, building, every link (port here, the switch it goes to, their port), and **Draw this stack** to open it on the Stack topology page.
+- **Building** shows one building with the switches it hangs off; **Find** highlights a switch by name, address or model; **Devices not on your list** shows or hides neighbors you haven't added (routers, switches). **Fit**, **+** and **-** zoom; **Print / Save PDF** prints it landscape.
+
+**How the links are found:** CDP and LLDP neighbors (switches and routers only; phones, access points and servers are left out). Each link is usually reported by both ends and is drawn once; a thick line with ×2 means two or more links between the same switches. Dell and Aruba switches only speak LLDP, and a Cisco only sees them if it runs LLDP (`lldp run`). A switch on your list that nothing reports is looked for by its MAC address in the other switches' MAC tables (and, on Cisco, the ARP table) and drawn with a **dashed line** to the port it was found on; the port on its own end isn't known.
+
+**How each switch's layer is decided:** by its model first (Nexus 7000/9500 and Catalyst 6500/6800/9600 are core; Catalyst 4500/9400/9500 and Nexus 5000/3000 are distribution; Catalyst 2960/3560-3850/9200/9300, Dell PowerConnect and Aruba S3500 are access). A switch with no known model is placed by where it sits: the one linked to the most switches is core, the ones just below it with switches below them are distribution, the rest are access. Routers and firewalls are drawn with the core. **If a switch is in the wrong layer**, click it and pick the right one; that's saved (in `data\network\layers.json`) and every map uses it from then on. **Automatic** puts it back.
+
+A switch that refused the login is still drawn where its neighbors say it is, with a red **!**.
+
 ## How it knows when a port was last used
 
 Each type of switch keeps track differently:
@@ -158,7 +173,7 @@ Each type of switch keeps track differently:
 
 ## Your data
 
-Your switch list, settings, saved reports, Stack topology drawings, Port documentation CSVs and any debug output live in the `data` folder next to the app. Git ignores that folder, so none of it ends up on GitHub, and updating the app never touches it.
+Your switch list, settings, saved reports, Stack topology drawings, Port documentation CSVs, Network maps and any debug output live in the `data` folder next to the app. Git ignores that folder, so none of it ends up on GitHub, and updating the app never touches it.
 
 ## Updating
 
@@ -201,6 +216,8 @@ analyzer.py         reading each switch type's ports, deciding Inactive/Unsure/A
 switches.py         logging in over SSH/telnet for each switch type
 report.py           the Excel report
 portdocs.py         Port documentation: every port of every switch, with MAC addresses, as CSVs
+network.py          Network map: CDP/LLDP neighbors, links, MAC-table fallback, core/distribution/access layers
+network_demo.py     the made-up campus for the sample map and the tests
 topology.py         Stack topology: reading a Cisco or Dell stack, deciding each port, PoE and error checks, the cable test, Cisco/Dell config translation, the saved page
 topology_demo.py    made-up Cisco and Dell stacks for the example pages and the tests
 templates/, static/ the pages
@@ -213,6 +230,7 @@ tests/              pretend switches, sample output for each type, end-to-end te
 .venv\Scripts\python tests\test_end_to_end.py
 .venv\Scripts\python tests\test_topology.py
 .venv\Scripts\python tests\test_portdocs.py
+.venv\Scripts\python tests\test_network.py
 ```
 
 **Add a switch type:** in `switches.py`, add it to `TYPES`, `MODELS` and `DRIVERS`. In `analyzer.py`, write a reader that returns each port's status, VLAN, description and when it was last used (or that it was never used, and how far back the switch can see), and add it to `READERS`. Put sample output in `tests/samples.py` and the expected answers next to it.

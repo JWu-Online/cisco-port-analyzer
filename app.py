@@ -9,6 +9,7 @@ Passwords are kept in memory for the run and never written to disk.
 import csv
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -19,6 +20,7 @@ from pathlib import Path
 from flask import Flask, Response, abort, jsonify, render_template, request
 
 import analyzer
+import network
 import portdocs
 import report
 import switches as sw
@@ -32,6 +34,7 @@ SWITCHES_FILE = DATA_DIR / "switches.csv"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 TOPOLOGY_DIR = DATA_DIR / "topology"
 DOCS_DIR = DATA_DIR / "docs"
+NETWORK_DIR = DATA_DIR / "network"
 
 DEFAULT_SETTINGS = {"months": 6, "default_protocol": "telnet", "parallel": 10, "timeout": 20}
 SWITCH_FIELDS = ["address", "type", "protocol", "building", "location"]
@@ -43,6 +46,8 @@ job = analyzer.Job()
 job_lock = threading.Lock()
 docs_job = analyzer.Job()          # Port documentation runs separately from the port check
 docs_lock = threading.Lock()
+net_job = analyzer.Job()           # and so does the Network map
+net_lock = threading.Lock()
 
 
 @app.before_request
@@ -470,6 +475,89 @@ def docs_download(run, kind):
     else:
         body, mimetype, name = portdocs.zip_bytes(folder), "application/zip", f"port-docs-{run}-per-switch.zip"
     return Response(body, mimetype=mimetype, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+# ---------------------------------------------------------------------------
+# Network map: every switch in the three-layer model, joined by CDP/LLDP links
+# ---------------------------------------------------------------------------
+@app.get("/network")
+def network_form():
+    return render_template("network_form.html")
+
+
+@app.post("/api/network/run")
+def network_run():
+    global net_job
+    payload = request.json or {}
+    with net_lock:
+        if net_job.state == "running":
+            return jsonify({"ok": False, "problems": ["A map is already being drawn."]}), 409
+        problems = []
+        chosen, label = pick_switches(str(payload.get("scope", "")), load_switches())
+        if not chosen:
+            problems.append("Add your switches on the Port Analyzer page first." if not load_switches()
+                            else "No switches match that choice.")
+        logins = logins_from(payload)
+        used = {s["protocol"] for s in chosen}
+        if "telnet" in used and not logins["telnet"].password:
+            problems.append("Enter the password.")
+        if "ssh" in used and not logins["ssh"].password:
+            problems.append("Enter the SSH password." if payload.get("ssh_different") else "Enter the password.")
+        problems = list(dict.fromkeys(problems))
+        if problems:
+            return jsonify({"ok": False, "problems": problems}), 400
+        net_job = analyzer.Job()
+        threading.Thread(target=network.run_job,
+                         args=(net_job, chosen, logins, load_settings(), NETWORK_DIR, DEBUG_DIR, label),
+                         daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/network/stop")
+def network_stop():
+    net_job.stop_requested.set()
+    net_job.log("Stopping after the switches already in progress finish...", "warn")
+    return jsonify({"ok": True})
+
+
+@app.get("/api/network/job")
+def network_status():
+    return jsonify(net_job.snapshot(int(request.args.get("since", 0))))
+
+
+@app.get("/api/network/pages")
+def network_pages():
+    return jsonify({"pages": network.list_pages(NETWORK_DIR)})
+
+
+@app.get("/network/page/<name>")
+def network_page(name):
+    pages = (NETWORK_DIR / "pages").resolve()
+    path = (pages / name).resolve()
+    if path.parent != pages or not path.is_file() or not re.fullmatch(r"network-\d{8}-\d{6}\.html", name):
+        abort(404)
+    return Response(path.read_text(encoding="utf-8"), mimetype="text/html")
+
+
+@app.get("/network/demo")
+def network_demo():
+    _, html, _ = network.run_demo()
+    return Response(html, mimetype="text/html")
+
+
+@app.get("/api/network/layers")
+def network_layers():
+    return jsonify({"ok": True, "layers": network.load_overrides(NETWORK_DIR)})
+
+
+@app.post("/api/network/layer")
+def network_set_layer():
+    """Someone picked a switch's layer on the map (or put it back to automatic)."""
+    payload = request.json or {}
+    node_id, layer = str(payload.get("id", "")).strip(), str(payload.get("layer", "")).strip()
+    if not node_id or len(node_id) > 200 or layer not in ("",) + network.LAYERS:
+        return jsonify({"ok": False, "problems": ["That isn't a switch and a layer."]}), 400
+    return jsonify({"ok": True, "layers": network.save_override(NETWORK_DIR, node_id, layer)})
 
 
 # ---------------------------------------------------------------------------

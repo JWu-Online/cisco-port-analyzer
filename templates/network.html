@@ -1,0 +1,758 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Network map{% if data.scope %} · {{ data.scope }}{% endif %}</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='12' y='3' width='8' height='6' rx='1' fill='%23d95926'/%3E%3Crect x='4' y='13' width='8' height='6' rx='1' fill='%233987e5'/%3E%3Crect x='20' y='13' width='8' height='6' rx='1' fill='%233987e5'/%3E%3Crect x='2' y='24' width='7' height='5' rx='1' fill='%23199e70'/%3E%3Crect x='12' y='24' width='7' height='5' rx='1' fill='%23199e70'/%3E%3Crect x='23' y='24' width='7' height='5' rx='1' fill='%23199e70'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --ink: #1C2833; --ink-2: #44525F; --ink-3: #66737F;
+    --bg: #EEF2F5; --surface: #FFFFFF; --sunken: #F5F7F9;
+    --line: #CDD5DD; --line-soft: #E2E7EC;
+    --action: #1E5AA8; --danger: #B42318; --warn-bg: #FFF4E0; --check: #D9822B;
+    --core: #d95926; --dist: #3987e5; --access: #199e70;
+    --link: #7D8B98; --link-hot: #1C2833;
+    --sans: "Segoe UI", "Segoe UI Variable Text", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono: "Cascadia Mono", "Cascadia Code", Consolas, "SFMono-Regular", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #E3E9EE; --ink-2: #B3BEC8; --ink-3: #8E9AA5;
+      --bg: #141A20; --surface: #1C242C; --sunken: #182027;
+      --line: #34414D; --line-soft: #2A3540;
+      --action: #4A8FE0; --danger: #F2877C; --warn-bg: #3A2E18; --check: #F0954A;
+      --link: #6B7A87; --link-hot: #E3E9EE;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
+  main { margin: 0 auto; padding: 22px 32px 48px; max-width: 1600px; }
+  h1 { font-size: 1.6rem; font-weight: 600; letter-spacing: -0.01em; margin: 0; line-height: 1.25; }
+  .back { font-size: 0.9rem; color: var(--action); text-decoration: none; font-weight: 600; }
+  .back:hover { text-decoration: underline; }
+  .sub { color: var(--ink-2); margin: 2px 0 18px; }
+  .mono { font-family: var(--mono); font-size: 0.92em; }
+  [hidden] { display: none !important; }
+  :focus-visible { outline: 2px solid var(--action); outline-offset: 2px; }
+
+  .totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+  .total { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 6px; padding: 12px 16px; }
+  .total-label { color: var(--ink-2); font-size: 0.88rem; display: flex; align-items: center; gap: 7px; }
+  .total-value { font-size: 1.75rem; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+  .total-note { color: var(--ink-3); font-size: 0.8rem; }
+  .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
+  .sw.core { background: var(--core); } .sw.distribution { background: var(--dist); } .sw.access { background: var(--access); }
+
+  .notice { background: var(--warn-bg); border-left: 3px solid var(--check); border-radius: 4px; padding: 8px 12px;
+            margin: 0 0 8px; font-size: 0.9rem; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin: 14px 0 10px; }
+  .controls label { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--ink-2); }
+  select, input[type=search] { font: inherit; font-size: 0.9rem; padding: 5px 8px; border: 1px solid var(--line);
+                               border-radius: 6px; background: var(--surface); color: var(--ink); }
+  input[type=search] { width: 270px; }
+  .btn { font: inherit; font-size: 0.88rem; font-weight: 600; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+         border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+  .btn:hover { border-color: var(--ink-3); }
+  .btn.primary { background: var(--action); border-color: var(--action); color: #fff; text-decoration: none; display: inline-block; }
+  .zoom { display: flex; gap: 4px; margin-left: auto; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.85rem; color: var(--ink-2); margin: 0 0 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend svg { flex: none; }
+
+  .map { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 6px; overflow: auto;
+         max-height: calc(100vh - 140px); min-height: 360px; position: relative; }
+  .map svg { display: block; }
+  .band { fill: var(--sunken); }
+  .band-label { font: 600 11px var(--sans); letter-spacing: 0.08em; fill: var(--ink-3); }
+  .edge { fill: none; stroke: var(--link); stroke-width: 1.5; }
+  .edge.thick { stroke-width: 3.5; }
+  .edge.mac { stroke-dasharray: 5 4; }
+  .edge.hot { stroke: var(--link-hot); stroke-width: 2.5; }
+  .edge.thick.hot { stroke-width: 4.5; }
+  .edge.faint { opacity: 0.15; }
+  .edge-hit { fill: none; stroke: transparent; stroke-width: 12; cursor: help; }
+  .count { font: 600 10px var(--sans); fill: var(--ink-2); paint-order: stroke; stroke: var(--surface); stroke-width: 3; }
+  .node { cursor: pointer; }
+  .node rect.box { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+  .node.other rect.box { stroke-dasharray: 4 3; stroke: var(--ink-3); }
+  .node .stripe.core { fill: var(--core); } .node .stripe.distribution { fill: var(--dist); } .node .stripe.access { fill: var(--access); }
+  .node .name { font: 600 12.5px var(--sans); fill: var(--ink); }
+  .node .meta { font: 11px var(--sans); fill: var(--ink-3); }
+  .node .bad { fill: var(--danger); }
+  .node .bad-text { font: 700 11px var(--sans); fill: #fff; }
+  .node:hover rect.box, .node.hot rect.box { stroke: var(--link-hot); stroke-width: 2; }
+  .node.hit rect.box { stroke: var(--action); stroke-width: 2.5; }
+  .node.dim { opacity: 0.25; }
+  .node.picked rect.box { stroke: var(--action); stroke-width: 2.5; }
+  .empty-map { padding: 40px; color: var(--ink-2); }
+
+  .tip { position: fixed; z-index: 30; background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
+         box-shadow: 0 6px 20px rgba(0,0,0,.15); padding: 8px 12px; font-size: 0.84rem; max-width: 360px;
+         pointer-events: none; }
+  .tip strong { display: block; font-size: 0.92rem; }
+  .tip .muted, .muted { color: var(--ink-3); }
+  .tip ul { margin: 4px 0 0; padding-left: 16px; }
+
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 440px; max-width: 100vw; background: var(--surface);
+            border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0,0,0,.12); z-index: 40;
+            display: flex; flex-direction: column; }
+  .drawer-head { padding: 16px 20px 10px; border-bottom: 1px solid var(--line-soft); display: flex; gap: 10px;
+                 align-items: flex-start; justify-content: space-between; }
+  .drawer-head h2 { margin: 0; font-size: 1.15rem; }
+  .drawer-body { padding: 14px 20px 24px; overflow: auto; }
+  .drawer h3 { font-size: 0.95rem; margin: 18px 0 6px; }
+  .facts { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 0; font-size: 0.9rem; }
+  .facts dt { color: var(--ink-3); }
+  .facts dd { margin: 0; }
+  .links-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  .links-table th, .links-table td { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line-soft);
+                                     vertical-align: top; }
+  .links-table th { color: var(--ink-3); font-weight: 600; }
+  .links-table a { color: var(--action); cursor: pointer; text-decoration: none; }
+  .links-table a:hover { text-decoration: underline; }
+  .why { font-size: 0.85rem; color: var(--ink-2); margin: 4px 0 0; }
+  .saved { color: var(--ink-3); font-size: 0.82rem; margin-left: 8px; }
+  .problem { color: var(--danger); font-size: 0.9rem; }
+
+  @media print {
+    @page { size: landscape; margin: 10mm; }
+    body { background: #fff; font-size: 11px; }
+    main { padding: 0; max-width: none; }
+    .controls, .drawer, .tip, .back, .zoom, .totals, .notice { display: none !important; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .sub { margin-bottom: 6px; }
+    .map { overflow: visible; max-height: none; min-height: 0; border: 0; break-inside: avoid; }
+    .map svg { width: 100% !important; height: auto !important; max-height: 160mm; }
+    .band { fill: #f2f2f2; }
+    .node rect.box { stroke: #000; }
+    .edge { stroke: #444; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="/network">&larr; Network map</a>
+  <h1>Network map</h1>
+  <p class="sub">{{ data.scope }} · drawn {{ data.drawn }} · {{ data.summary.read }} of {{ data.summary.listed }} switches read{% if data.demo %} · <strong>made-up sample</strong>{% endif %}</p>
+
+  <div class="totals">
+    <div class="total"><div class="total-label"><span class="sw core"></span>Core</div><div class="total-value" id="t-core">{{ data.summary.layers.core }}</div><div class="total-note">fast backbone between buildings</div></div>
+    <div class="total"><div class="total-label"><span class="sw distribution"></span>Distribution</div><div class="total-value" id="t-distribution">{{ data.summary.layers.distribution }}</div><div class="total-note">joins a building's closets to the core</div></div>
+    <div class="total"><div class="total-label"><span class="sw access"></span>Access</div><div class="total-value" id="t-access">{{ data.summary.layers.access }}</div><div class="total-note">where people and devices plug in</div></div>
+    <div class="total"><div class="total-label">Links</div><div class="total-value">{{ data.summary.links }}</div><div class="total-note">{{ data.summary.other }} device(s) not on your list</div></div>
+  </div>
+  {% for w in data.warnings %}<p class="notice">{{ w }}</p>{% endfor %}
+
+  <div class="controls">
+    <label>Building <select id="building"><option value="">All buildings</option></select></label>
+    <input type="search" id="q" placeholder="Find a switch, address or model" aria-label="Find a switch">
+    <label><input type="checkbox" id="others" checked> Devices not on your list</label>
+    <div class="zoom">
+      <button type="button" class="btn" id="z-out" aria-label="Zoom out">&minus;</button>
+      <button type="button" class="btn" id="z-fit">Fit</button>
+      <button type="button" class="btn" id="z-in" aria-label="Zoom in">+</button>
+      <button type="button" class="btn" id="print">Print / Save PDF</button>
+    </div>
+  </div>
+  <div class="legend">
+    <span><span class="sw core"></span>Core</span>
+    <span><span class="sw distribution"></span>Distribution</span>
+    <span><span class="sw access"></span>Access</span>
+    <span><svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" class="edge"/></svg>link (CDP or LLDP)</span>
+    <span><svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" class="edge thick"/></svg>2 or more links</span>
+    <span><svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" class="edge mac"/></svg>found by MAC address</span>
+    <span><svg width="34" height="16"><rect x="1" y="1" width="32" height="14" rx="3" fill="none" stroke="currentColor" stroke-dasharray="4 3"/></svg>not on your list</span>
+    <span><svg width="14" height="14"><circle cx="7" cy="7" r="6" class="bad" fill="#B42318"/></svg>couldn't log in</span>
+  </div>
+
+  <div class="map" id="map"></div>
+</main>
+
+<div class="tip" id="tip" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-labelledby="d-title">
+  <div class="drawer-head">
+    <div><h2 id="d-title"></h2><div class="muted" id="d-sub"></div></div>
+    <button type="button" class="btn" id="d-close" aria-label="Close">&times;</button>
+  </div>
+  <div class="drawer-body">
+    <p class="problem" id="d-problem" hidden></p>
+    <dl class="facts" id="d-facts"></dl>
+    <h3>Layer</h3>
+    <div><select id="d-layer"></select><span class="saved" id="d-saved"></span></div>
+    <p class="why" id="d-why"></p>
+    <div id="d-actions" style="margin-top:12px"></div>
+    <h3>Links</h3>
+    <table class="links-table"><thead><tr><th>Port here</th><th>To</th><th>Their port</th><th>Found by</th></tr></thead><tbody id="d-links"></tbody></table>
+  </div>
+</aside>
+
+<script type="application/json" id="data">{{ data_json | safe }}</script>
+<script>
+(function () {
+  "use strict";
+  var D = JSON.parse(document.getElementById("data").textContent);
+  var SERVED = /^https?:$/.test(location.protocol);
+  var LAYERS = ["core", "distribution", "access"];
+  var NAMES = { core: "Core", distribution: "Distribution", access: "Access" };
+  var W = 176, H = 46, GAP = 22, COL_GAP = 30, ROW_GAP = 12, MAX_ROWS = 10, CLUSTER_GAP = 34, FAMILY_GAP = 60;
+  var LEFT = 118, TOP = 28;
+  var SVGNS = "http://www.w3.org/2000/svg";
+
+  var byId = {};
+  D.nodes.forEach(function (n) { byId[n.id] = n; });
+  var overrides = null;                  // from the app: the layers people picked (null = use what was drawn)
+  var state = { building: "", q: "", others: true, zoom: 1, picked: null };
+  var current = null;                    // the last layout
+
+  function layerOf(n) {
+    if (overrides) return Object.prototype.hasOwnProperty.call(overrides, n.id) ? overrides[n.id] : n.layer_auto;
+    return n.layer;
+  }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
+  }
+  function svg(tag, attrs, parent) {
+    var e = document.createElementNS(SVGNS, tag);
+    Object.keys(attrs || {}).forEach(function (k) { e.setAttribute(k, attrs[k]); });
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function natural(a, b) { return String(a || "").localeCompare(String(b || ""), undefined, { numeric: true }); }
+  function clip(text, n) { text = text || ""; return text.length > n ? text.slice(0, n - 1) + "…" : text; }
+  function linksOf(id) {
+    return D.links.filter(function (l) { return l.a === id || l.b === id; });
+  }
+
+  // ---------------------------------------------------------------- what's shown
+  function visible() {
+    var nodes = D.nodes.filter(function (n) { return state.others || n.listed; });
+    if (state.building) {
+      var keep = {};
+      nodes.forEach(function (n) { if (n.building === state.building) keep[n.id] = true; });
+      // the switches above them, so the building hangs off its distribution and core
+      var grew = true;
+      while (grew) {
+        grew = false;
+        D.links.forEach(function (l) {
+          [[l.a, l.b], [l.b, l.a]].forEach(function (p) {
+            var other = byId[p[1]];
+            if (keep[p[0]] && !keep[p[1]] && other && layerOf(other) !== "access" &&
+                LAYERS.indexOf(layerOf(other)) < LAYERS.indexOf(layerOf(byId[p[0]]))) {
+              keep[p[1]] = true; grew = true;
+            }
+          });
+        });
+      }
+      nodes = nodes.filter(function (n) { return keep[n.id]; });
+    }
+    var ids = {};
+    nodes.forEach(function (n) { ids[n.id] = true; });
+    var links = D.links.filter(function (l) { return ids[l.a] && ids[l.b]; });
+    return { nodes: nodes, links: links };
+  }
+
+  // ---------------------------------------------------------------- layout
+  function layout(view) {
+    var adj = {}, pos = {};
+    view.nodes.forEach(function (n) { adj[n.id] = []; });
+    view.links.forEach(function (l) { adj[l.a].push(l.b); adj[l.b].push(l.a); });
+    var isAccess = function (id) { return layerOf(byId[id]) === "access"; };
+    var core = view.nodes.filter(function (n) { return layerOf(n) === "core"; })
+      .sort(function (a, b) { return (a.listed === b.listed ? 0 : a.listed ? -1 : 1) || natural(a.name, b.name); });
+    var dist = view.nodes.filter(function (n) { return layerOf(n) === "distribution"; })
+      .sort(function (a, b) { return natural(a.building, b.building) || natural(a.name, b.name); });
+    var access = view.nodes.filter(function (n) { return layerOf(n) === "access"; })
+      .sort(function (a, b) { return natural(a.building, b.building) || natural(a.location, b.location) || natural(a.name, b.name); });
+
+    // Each access switch hangs off the switches above it that it reaches (directly or through other access switches)
+    var clusterOf = {}, clusters = {};
+    access.forEach(function (n) {
+      if (clusterOf[n.id]) return;
+      var seen = {}, queue = [n.id], members = [], attach = {};
+      seen[n.id] = true;
+      while (queue.length) {
+        var id = queue.shift();
+        members.push(id);
+        adj[id].forEach(function (m) {
+          if (isAccess(m)) { if (!seen[m]) { seen[m] = true; queue.push(m); } }
+          else attach[m] = true;
+        });
+      }
+      var key = Object.keys(attach).sort().join("|");
+      var c = clusters[key] || (clusters[key] = { key: key, attach: Object.keys(attach), members: [] });
+      members.forEach(function (m) { clusterOf[m] = c; c.members.push(m); });
+    });
+    // Order inside a cluster: switches on an uplink first, each followed by the ones chained behind it
+    Object.keys(clusters).forEach(function (k) {
+      var c = clusters[k], inC = {}, done = {}, order = [];
+      c.members.forEach(function (m) { inC[m] = true; });
+      var heads = c.members.filter(function (m) { return adj[m].some(function (x) { return !isAccess(x); }); });
+      heads.sort(function (a, b) { return natural(byId[a].location, byId[b].location) || natural(byId[a].name, byId[b].name); });
+      function walk(id) {
+        if (done[id]) return;
+        done[id] = true; order.push(id);
+        adj[id].filter(function (x) { return inC[x] && !done[x]; })
+          .sort(function (a, b) { return natural(byId[a].name, byId[b].name); }).forEach(walk);
+      }
+      heads.forEach(walk);
+      c.members.slice().sort(function (a, b) { return natural(byId[a].name, byId[b].name); }).forEach(walk);
+      c.members = order;
+      var cols = Math.ceil(order.length / MAX_ROWS);
+      c.rows = Math.ceil(order.length / cols);
+      c.cols = cols;
+      c.width = cols * W + (cols - 1) * COL_GAP;
+    });
+
+    // Families: distribution switches that share closets (a pair) or link to each other, with their clusters
+    var distIndex = {}, parent = {};
+    dist.forEach(function (n, i) { distIndex[n.id] = i; parent[n.id] = n.id; });
+    function find(x) { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+    function join(a, b) { a = find(a); b = find(b); if (a !== b) parent[Math.max(distIndex[a], distIndex[b]) === distIndex[a] ? a : b] = distIndex[a] < distIndex[b] ? a : b; }
+    Object.keys(clusters).forEach(function (k) {
+      var ds = clusters[k].attach.filter(function (id) { return distIndex[id] !== undefined; });
+      for (var i = 1; i < ds.length; i++) join(ds[0], ds[i]);
+    });
+    view.links.forEach(function (l) {
+      if (distIndex[l.a] !== undefined && distIndex[l.b] !== undefined && byId[l.a].building === byId[l.b].building) join(l.a, l.b);
+    });
+    var families = {}, famOrder = [];
+    dist.forEach(function (n) {
+      var r = find(n.id);
+      if (!families[r]) { families[r] = { dist: [], clusters: [] }; famOrder.push(r); }
+      families[r].dist.push(n.id);
+    });
+    var coreFam = { dist: [], clusters: [], core: true }, looseFam = { dist: [], clusters: [], loose: true };
+    Object.keys(clusters).sort(function (a, b) {
+      var A = clusters[a], B = clusters[b];
+      return natural(byId[A.members[0]].building, byId[B.members[0]].building) ||
+             natural(byId[A.members[0]].location, byId[B.members[0]].location);
+    }).forEach(function (k) {
+      var c = clusters[k];
+      var ds = c.attach.filter(function (id) { return distIndex[id] !== undefined; });
+      if (ds.length) families[find(ds[0])].clusters.push(c);
+      else if (c.attach.length) coreFam.clusters.push(c);
+      else looseFam.clusters.push(c);
+    });
+    var famList = (coreFam.clusters.length ? [coreFam] : []).concat(famOrder.map(function (r) { return families[r]; }))
+      .concat(looseFam.clusters.length ? [looseFam] : []);
+
+    // Rows
+    var yCore = TOP, yDist = yCore + H + 96, yBus = yDist + H + 44, yAccess = yBus + 26;
+    var x = LEFT, maxRows = 0;
+    famList.forEach(function (f) {
+      var rowW = f.dist.length ? f.dist.length * W + (f.dist.length - 1) * GAP : 0;
+      var cw = f.clusters.reduce(function (s, c) { return s + c.width; }, 0) + Math.max(0, f.clusters.length - 1) * CLUSTER_GAP;
+      f.width = Math.max(rowW, cw, W);
+      f.x = x;
+      var dx = x + (f.width - rowW) / 2;
+      f.dist.forEach(function (id, i) { pos[id] = { x: dx + i * (W + GAP), y: yDist }; });
+      var cx = x + (f.width - cw) / 2 + 12;
+      var step = f.clusters.length > 1 ? Math.min(9, 34 / (f.clusters.length - 1)) : 0;
+      f.clusters.forEach(function (c, k) {
+        c.x = cx;
+        c.busY = yBus - k * step;              // each closet group gets its own bus, so they don't merge
+        c.viaCore = !!f.core;
+        c.members.forEach(function (id, i) {
+          var col = Math.floor(i / c.rows), row = i % c.rows;
+          pos[id] = { x: cx + col * (W + COL_GAP), y: yAccess + row * (H + ROW_GAP), col: col };
+        });
+        maxRows = Math.max(maxRows, c.rows);
+        cx += c.width + CLUSTER_GAP;
+      });
+      x += f.width + FAMILY_GAP;
+    });
+    var width = Math.max(x - FAMILY_GAP + 40, LEFT + core.length * (W + GAP) + 40, 600);
+
+    // Core: above the switches each one links to
+    var wanted = core.map(function (n, i) {
+      var xs = [];
+      adj[n.id].forEach(function (m) {
+        if (pos[m] && !isAccess(m)) xs.push(pos[m].x + W / 2);
+        else if (pos[m] && clusterOf[m]) xs.push(clusterOf[m].x + clusterOf[m].width / 2);
+      });
+      var want = xs.length ? xs.reduce(function (s, v) { return s + v; }, 0) / xs.length - W / 2 : LEFT + i * (W + GAP);
+      return { id: n.id, want: want, i: i };
+    }).sort(function (a, b) { return a.want - b.want || a.i - b.i; });
+    // spread them evenly around the middle of where they want to be
+    if (wanted.length) {
+      var span = wanted.length * W + (wanted.length - 1) * GAP;
+      var mid = wanted.reduce(function (s, w) { return s + w.want; }, 0) / wanted.length + W / 2;
+      var start = Math.max(LEFT, Math.min(mid - span / 2, width - span - 20));
+      wanted.forEach(function (w, i) { pos[w.id] = { x: start + i * (W + GAP), y: yCore }; });
+      width = Math.max(width, start + span + 40);
+    }
+    var height = yAccess + Math.max(1, maxRows) * (H + ROW_GAP) + 24;
+    return { pos: pos, adj: adj, clusters: clusters, clusterOf: clusterOf, width: width, height: height,
+             rows: { core: yCore, distribution: yDist, access: yAccess, bus: yBus }, view: view, families: famList };
+  }
+
+  // ---------------------------------------------------------------- drawing
+  function linkClass(l) {
+    return "edge" + (l.pairs.length > 1 ? " thick" : "") + (l.mac ? " mac" : "");
+  }
+  function draw() {
+    hideTip();
+    var view = visible();
+    var map = document.getElementById("map");
+    map.textContent = "";
+    if (!view.nodes.length) { map.appendChild(el("p", "empty-map", "Nothing to draw for this choice.")); return; }
+    var L = current = layout(view);
+    var root = svg("svg", { viewBox: "0 0 " + L.width + " " + L.height, width: L.width * state.zoom,
+                            height: L.height * state.zoom, role: "img", "aria-label": "Network map" });
+    // Bands with the layer names, so layer isn't told by color alone
+    [["core", L.rows.core], ["distribution", L.rows.distribution], ["access", L.rows.bus - 8]].forEach(function (b, i) {
+      var top = i === 0 ? 0 : i === 1 ? L.rows.distribution - 30 : L.rows.bus - 14;
+      var bottom = i === 0 ? L.rows.distribution - 30 : i === 1 ? L.rows.bus - 14 : L.height;
+      if (i !== 1) svg("rect", { x: 0, y: top, width: L.width, height: bottom - top, "class": "band" }, root);
+      var t = svg("text", { x: 14, y: (i === 2 ? L.rows.access : b[1]) + H / 2 + 4, "class": "band-label" }, root);
+      t.textContent = NAMES[b[0]].toUpperCase();
+    });
+    var edges = svg("g", {}, root), nodesG = svg("g", {}, root);
+    var P = L.pos;
+    function mid(id) { return P[id].x + W / 2; }
+    function hit(path, ends, l) {
+      var h = svg("path", { d: path, "class": "edge-hit" }, edges);
+      h.dataset.ends = ends.join(" ");
+      if (l) { h.addEventListener("mouseenter", function (e) { tipLink(e, l); }); h.addEventListener("mousemove", moveTip);
+               h.addEventListener("mouseleave", hideTip); }
+    }
+    function line(d, cls, ends, l) {
+      var p = svg("path", { d: d, "class": cls }, edges);
+      p.dataset.ends = ends.join(" ");
+      if (l) hit(d, ends, l);
+      return p;
+    }
+
+    // Links between core and distribution (and anything else above the access row)
+    var handled = {};
+    view.links.forEach(function (l) {
+      var a = byId[l.a], b = byId[l.b];
+      if (layerOf(a) === "access" && layerOf(b) === "access") return;          // drawn with the closets
+      if (layerOf(a) === "access" || layerOf(b) === "access") {
+        var acc = layerOf(a) === "access" ? l.a : l.b, up = acc === l.a ? l.b : l.a;
+        if (L.clusterOf[acc] && L.clusterOf[acc].attach.indexOf(up) !== -1) return; // drawn by the bus
+      }
+      handled[l.a + "|" + l.b] = true;
+      var pa = P[l.a], pb = P[l.b], d;
+      if (pa.y === pb.y) {
+        var left = pa.x < pb.x ? pa : pb, right = pa.x < pb.x ? pb : pa;
+        if (right.x - left.x <= W + GAP + 1) d = "M" + (left.x + W) + "," + (left.y + H / 2) + " L" + right.x + "," + (right.y + H / 2);
+        else d = "M" + (left.x + W / 2) + "," + left.y + " Q" + ((left.x + right.x) / 2 + W / 2) + "," + (left.y - 40) +
+                 " " + (right.x + W / 2) + "," + right.y;
+      } else {
+        var top = pa.y < pb.y ? pa : pb, bot = pa.y < pb.y ? pb : pa;
+        d = "M" + (top.x + W / 2) + "," + (top.y + H) + " L" + (bot.x + W / 2) + "," + bot.y;
+      }
+      line(d, linkClass(l), [l.a, l.b], l);
+      if (l.pairs.length > 1) {
+        var same = pa.y === pb.y, near = same && Math.abs(pa.x - pb.x) <= W + GAP + 1;
+        var t = svg("text", { x: (pa.x + pb.x) / 2 + W / 2 + (same ? 0 : 6), "text-anchor": same ? "middle" : "start",
+                              y: near ? pa.y + H / 2 - 7 : same ? pa.y - 24 : (pa.y + pb.y) / 2 + H / 2, "class": "count" }, edges);
+        t.textContent = "×" + l.pairs.length;
+      }
+    });
+
+    // Closets: a bus under the switches they hang off, a spine down each column, a tick to each switch
+    Object.keys(L.clusters).forEach(function (k) {
+      var c = L.clusters[k];
+      var everyone = c.members.concat(c.attach);
+      var cols = {};
+      c.members.forEach(function (id) { (cols[P[id].col] = cols[P[id].col] || []).push(id); });
+      var spineXs = Object.keys(cols).map(function (col) { return c.x + Number(col) * (W + COL_GAP) - 12; });
+      var busY = c.busY;
+      if (c.attach.length) {
+        // Closets straight off the core (no distribution) are reached by a path around the distribution row
+        var xs = spineXs.concat(c.viaCore ? [] : c.attach.map(mid));
+        var busL = Math.min.apply(null, xs), busR = Math.max.apply(null, xs);
+        if (busR > busL) line("M" + busL + "," + busY + " L" + busR + "," + busY, "edge", everyone);
+        c.attach.forEach(function (up) {
+          var top = P[up].y + H, x = mid(up);
+          var mine = c.members.filter(function (m) { return L.adj[m].indexOf(up) !== -1; });
+          var ls = view.links.filter(function (l) { return (l.a === up || l.b === up) && mine.indexOf(l.a === up ? l.b : l.a) !== -1; });
+          var cls = "edge" + (ls.length && ls.every(function (l) { return l.mac; }) ? " mac" : "");
+          if (c.viaCore) {
+            var over = L.rows.distribution - 22;
+            line("M" + x + "," + top + " L" + x + "," + over + " L" + busL + "," + over + " L" + busL + "," + busY, cls, [up].concat(mine));
+          } else {
+            line("M" + x + "," + top + " L" + x + "," + busY, cls, [up].concat(mine));
+          }
+        });
+      }
+      Object.keys(cols).forEach(function (col, i) {
+        var ids = cols[col], sx = spineXs[i];
+        var onBus = ids.filter(function (id) { return L.adj[id].some(function (x) { return c.attach.indexOf(x) !== -1; }); });
+        if (onBus.length && c.attach.length) {
+          var last = Math.max.apply(null, onBus.map(function (id) { return P[id].y; }));
+          line("M" + sx + "," + busY + " L" + sx + "," + (last + H / 2), "edge", everyone);
+        }
+        ids.forEach(function (id) {
+          var ups = view.links.filter(function (l) {
+            var other = l.a === id ? l.b : l.b === id ? l.a : null;
+            return other && c.attach.indexOf(other) !== -1;
+          });
+          if (!ups.length || !c.attach.length) return;
+          var cls = "edge" + (ups.every(function (l) { return l.mac; }) ? " mac" : "") +
+                    (ups.some(function (l) { return l.pairs.length > 1; }) ? " thick" : "");
+          var y = P[id].y + H / 2;
+          line("M" + sx + "," + y + " L" + P[id].x + "," + y, cls, [id].concat(ups.map(function (l) { return l.a === id ? l.b : l.a; })), ups[0]);
+        });
+      });
+    });
+    // Access switches chained behind another one, and anything else left
+    view.links.forEach(function (l) {
+      if (handled[l.a + "|" + l.b]) return;
+      var a = byId[l.a], b = byId[l.b];
+      if (!(layerOf(a) === "access" && layerOf(b) === "access")) return;
+      var pa = P[l.a], pb = P[l.b];
+      var top = pa.y <= pb.y ? pa : pb, bot = pa.y <= pb.y ? pb : pa;
+      var d;
+      if (top.x === bot.x) {
+        var rx = top.x + W, bend = Math.min(26, 10 + (bot.y - top.y) / 8);
+        d = "M" + rx + "," + (top.y + H / 2) + " C" + (rx + bend) + "," + (top.y + H / 2) + " " + (rx + bend) + "," +
+            (bot.y + H / 2) + " " + rx + "," + (bot.y + H / 2);
+      } else {
+        d = "M" + (top.x + W / 2) + "," + (top.y + H) + " C" + (top.x + W / 2) + "," + (top.y + H + 40) + " " +
+            (bot.x + W / 2) + "," + (bot.y - 40) + " " + (bot.x + W / 2) + "," + bot.y;
+      }
+      line(d, linkClass(l), [l.a, l.b], l);
+    });
+
+    // Switches
+    view.nodes.forEach(function (n) {
+      var p = P[n.id], layer = layerOf(n);
+      var g = svg("g", { transform: "translate(" + p.x + "," + p.y + ")", "class": "node" + (n.listed ? "" : " other"),
+                         tabindex: 0, role: "button", "aria-label": n.name + ", " + NAMES[layer] }, nodesG);
+      g.dataset.id = n.id;
+      svg("rect", { width: W, height: H, rx: 6, "class": "box" }, g);
+      svg("rect", { width: 5, height: H - 2, x: 1, y: 1, rx: 2, "class": "stripe " + layer }, g);
+      var name = svg("text", { x: 14, y: 19, "class": "name" }, g);
+      name.textContent = clip(n.name, 21);
+      var meta = svg("text", { x: 14, y: 36, "class": "meta" }, g);
+      meta.textContent = clip(n.listed ? [n.location || n.building, n.model].filter(Boolean).join(" · ")
+                                       : "Not on your list" + (n.model ? " · " + n.model : ""), 29);
+      if (n.listed && !n.read) {
+        svg("circle", { cx: W - 12, cy: 12, r: 7, "class": "bad" }, g);
+        var t = svg("text", { x: W - 12, y: 16, "class": "bad-text", "text-anchor": "middle" }, g);
+        t.textContent = "!";
+      }
+      g.addEventListener("mouseenter", function (e) { hot(n.id); tipNode(e, n); });
+      g.addEventListener("mousemove", moveTip);
+      g.addEventListener("mouseleave", function () { hot(null); hideTip(); });
+      g.addEventListener("click", function () { openPanel(n.id); });
+      g.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPanel(n.id); } });
+    });
+    map.appendChild(root);
+    search();
+    if (state.picked) mark(state.picked);
+  }
+
+  function hot(id) {
+    var svgEl = document.querySelector("#map svg");
+    if (!svgEl) return;
+    var near = {};
+    if (id) { near[id] = true; (current.adj[id] || []).forEach(function (m) { near[m] = true; }); }
+    svgEl.querySelectorAll(".edge").forEach(function (e) {
+      var ends = (e.dataset.ends || "").split(" ");
+      var on = id && ends.indexOf(id) !== -1;
+      e.classList.toggle("hot", !!on);
+      e.classList.toggle("faint", !!id && !on);
+    });
+    svgEl.querySelectorAll(".node").forEach(function (g) {
+      g.classList.toggle("hot", !!id && g.dataset.id === id);
+      if (!state.q) g.classList.toggle("dim", !!id && !near[g.dataset.id]);
+    });
+  }
+  function search() {
+    var q = state.q.trim().toLowerCase();
+    document.querySelectorAll("#map .node").forEach(function (g) {
+      var n = byId[g.dataset.id];
+      var hay = [n.name, n.address, n.model, n.building, n.location].join(" ").toLowerCase();
+      var match = q && hay.indexOf(q) !== -1;
+      g.classList.toggle("hit", !!match);
+      g.classList.toggle("dim", !!q && !match);
+    });
+  }
+  function mark(id) {
+    document.querySelectorAll("#map .node").forEach(function (g) { g.classList.toggle("picked", g.dataset.id === id); });
+  }
+
+  // ---------------------------------------------------------------- tooltip and panel
+  var tip = document.getElementById("tip");
+  function portList(id) {
+    var out = [];
+    linksOf(id).forEach(function (l) {
+      var mine = l.a === id, other = byId[mine ? l.b : l.a];
+      l.pairs.forEach(function (p) {
+        out.push({ here: mine ? p.a_port : p.b_port, there: mine ? p.b_port : p.a_port, other: other, by: p.found_by });
+      });
+    });
+    return out.sort(function (a, b) { return natural(a.here, b.here); });
+  }
+  function tipNode(e, n) {
+    tip.textContent = "";
+    tip.appendChild(el("strong", null, n.name));
+    tip.appendChild(el("div", "muted", [n.address, n.model, [n.building, n.location].filter(Boolean).join(", ")].filter(Boolean).join(" · ")));
+    var layer = layerOf(n);
+    tip.appendChild(el("div", null, NAMES[layer] + (layer !== n.layer_auto ? " (you set this)" : "")));
+    if (n.listed && !n.read) tip.appendChild(el("div", "problem", "Couldn't log in: " + (n.problem || "no answer")));
+    if (!n.listed) tip.appendChild(el("div", "muted", "Not on your switch list"));
+    var ports = portList(n.id), ul = el("ul");
+    ports.slice(0, 10).forEach(function (p) {
+      ul.appendChild(el("li", null, (p.here || "?") + " → " + p.other.name + (p.there ? " " + p.there : "")));
+    });
+    if (ports.length > 10) ul.appendChild(el("li", "muted", "and " + (ports.length - 10) + " more"));
+    if (ports.length) tip.appendChild(ul);
+    tip.hidden = false;
+    moveTip(e);
+  }
+  function tipLink(e, l) {
+    tip.textContent = "";
+    tip.appendChild(el("strong", null, byId[l.a].name + " ↔ " + byId[l.b].name));
+    var ul = el("ul");
+    l.pairs.forEach(function (p) {
+      ul.appendChild(el("li", null, (p.a_port || "?") + " ↔ " + (p.b_port || "?") + " (" + p.found_by + ")"));
+    });
+    tip.appendChild(ul);
+    if (l.mac) tip.appendChild(el("div", "muted", "Found by MAC address: the port on the far end isn't known."));
+    tip.hidden = false;
+    moveTip(e);
+  }
+  function moveTip(e) {
+    var x = e.clientX + 14, y = e.clientY + 14, r = tip.getBoundingClientRect();
+    if (x + r.width > window.innerWidth - 8) x = e.clientX - r.width - 14;
+    if (y + r.height > window.innerHeight - 8) y = e.clientY - r.height - 14;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  }
+  function hideTip() { tip.hidden = true; }
+
+  var drawer = document.getElementById("drawer");
+  function fact(dl, k, v) { if (!v) return; dl.appendChild(el("dt", null, k)); dl.appendChild(el("dd", null, v)); }
+  function openPanel(id) {
+    var n = byId[id];
+    state.picked = id;
+    mark(id);
+    document.getElementById("d-title").textContent = n.name;
+    document.getElementById("d-sub").textContent = n.listed ? NAMES[layerOf(n)] + " switch" : "Not on your switch list";
+    var prob = document.getElementById("d-problem");
+    prob.hidden = !(n.listed && !n.read);
+    prob.textContent = "Couldn't log in: " + (n.problem || "no answer") + ". Drawn where its neighbors say it is.";
+    var dl = document.getElementById("d-facts");
+    dl.textContent = "";
+    fact(dl, "Address", n.address);
+    fact(dl, "Model", n.model);
+    fact(dl, "Type", n.type_name);
+    fact(dl, "Building", n.building);
+    fact(dl, "Location", n.location);
+    fact(dl, "Links", String(linksOf(id).length) + " switch(es)/router(s)");
+
+    var sel = document.getElementById("d-layer");
+    sel.textContent = "";
+    var auto = el("option", null, "Automatic (" + NAMES[n.layer_auto] + ")");
+    auto.value = "";
+    sel.appendChild(auto);
+    LAYERS.forEach(function (l) { var o = el("option", null, NAMES[l]); o.value = l; sel.appendChild(o); });
+    var set = overrides ? (Object.prototype.hasOwnProperty.call(overrides, id) ? overrides[id] : "")
+                        : (n.layer !== n.layer_auto ? n.layer : "");
+    sel.value = set;
+    sel.disabled = !SERVED || !overrides;
+    document.getElementById("d-saved").textContent = !SERVED ? "Open this map from the app to change layers." : "";
+    document.getElementById("d-why").textContent = set ? "You set this. Automatic would be " + NAMES[n.layer_auto] +
+      ": " + n.layer_why.charAt(0).toLowerCase() + n.layer_why.slice(1) + "." : n.layer_why + ".";
+
+    var actions = document.getElementById("d-actions");
+    actions.textContent = "";
+    if (SERVED && n.listed && (n.type === "cisco_ios" || n.type === "dell_powerconnect") && !D.demo) {
+      var a = el("a", "btn primary", "Draw this stack");
+      a.href = "/topology?address=" + encodeURIComponent(n.address);
+      actions.appendChild(a);
+    }
+
+    var body = document.getElementById("d-links");
+    body.textContent = "";
+    portList(id).forEach(function (p) {
+      var tr = el("tr");
+      tr.appendChild(el("td", "mono", p.here || "?"));
+      var td = el("td"), go = el("a", null, p.other.name);
+      go.addEventListener("click", function () { openPanel(p.other.id); });
+      td.appendChild(go);
+      tr.appendChild(td);
+      tr.appendChild(el("td", "mono", p.there || "?"));
+      tr.appendChild(el("td", null, p.by));
+      body.appendChild(tr);
+    });
+    if (!body.children.length) {
+      var tr0 = el("tr"), td0 = el("td", "muted", "No links found.");
+      td0.colSpan = 4; tr0.appendChild(td0); body.appendChild(tr0);
+    }
+    drawer.hidden = false;
+  }
+  function closePanel() { drawer.hidden = true; state.picked = null; mark(null); }
+  document.getElementById("d-close").addEventListener("click", closePanel);
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !drawer.hidden) closePanel(); });
+  document.getElementById("d-layer").addEventListener("change", function () {
+    var id = state.picked, layer = this.value, saved = document.getElementById("d-saved");
+    if (D.demo) {                                       // the sample isn't saved: it changes until the page reloads
+      if (layer) overrides[id] = layer; else delete overrides[id];
+      draw(); totals(); openPanel(id);
+      document.getElementById("d-saved").textContent = "Changed on this sample only.";
+      return;
+    }
+    saved.textContent = "Saving…";
+    fetch("/api/network/layer", { method: "POST", headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ id: id, layer: layer }) })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) { saved.textContent = (data.problems || ["Couldn't save."]).join(" "); return; }
+        overrides = data.layers;
+        draw(); totals(); openPanel(id);
+        document.getElementById("d-saved").textContent = "Saved. Every map uses it from now on.";
+      }, function () { saved.textContent = "Couldn't reach the app."; });
+  });
+  function totals() {
+    LAYERS.forEach(function (l) {
+      document.getElementById("t-" + l).textContent = D.nodes.filter(function (n) { return layerOf(n) === l; }).length;
+    });
+  }
+
+  // ---------------------------------------------------------------- controls
+  var buildings = {};
+  D.nodes.forEach(function (n) { if (n.building) buildings[n.building] = true; });
+  var bsel = document.getElementById("building");
+  Object.keys(buildings).sort(natural).forEach(function (b) { var o = el("option", null, b); o.value = b; bsel.appendChild(o); });
+  bsel.addEventListener("change", function () { state.building = bsel.value; draw(); fit(); });
+  document.getElementById("q").addEventListener("input", function () { state.q = this.value; search(); });
+  document.getElementById("others").addEventListener("change", function () { state.others = this.checked; draw(); });
+  function zoomTo(z) {
+    state.zoom = Math.max(0.2, Math.min(2, z));
+    var s = document.querySelector("#map svg");
+    if (s && current) { s.setAttribute("width", current.width * state.zoom); s.setAttribute("height", current.height * state.zoom); }
+  }
+  function fit() {
+    if (!current) return;
+    var box = document.getElementById("map");
+    zoomTo(Math.min(1, (box.clientWidth - 4) / current.width));
+  }
+  document.getElementById("z-in").addEventListener("click", function () { zoomTo(state.zoom * 1.25); });
+  document.getElementById("z-out").addEventListener("click", function () { zoomTo(state.zoom / 1.25); });
+  document.getElementById("z-fit").addEventListener("click", fit);
+  document.getElementById("print").addEventListener("click", function () { window.print(); });
+
+  draw();
+  fit();
+  if (state.zoom < 0.55) zoomTo(0.55);        // a big network: readable, scroll around (Fit shows it all)
+  if (SERVED && !D.demo) {
+    fetch("/api/network/layers").then(function (r) { return r.json(); }).then(function (data) {
+      overrides = data.layers || {};
+      draw(); totals();
+    }, function () { /* drawn as saved */ });
+  } else if (SERVED && D.demo) {
+    overrides = {};
+  }
+})();
+</script>
+</body>
+</html>

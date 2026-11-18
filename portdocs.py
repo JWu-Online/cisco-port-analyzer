@@ -48,27 +48,43 @@ def mac_dotted(mac):
     return ".".join(digits[i:i + 4] for i in (0, 4, 8))
 
 
-def parse_mac_table(output):
-    """'show mac address-table' (Cisco IOS, Nexus, Dell or Aruba) -> {port key: [(mac, vlan), ...]}.
+def mac_sightings(output):
+    """'show mac address-table' (Cisco IOS, Nexus, Dell or Aruba) -> [(mac, vlan, port), ...].
 
-    The port key is analyzer.match_key, so Gi1/0/5, GigabitEthernet1/0/5 and gi1/0/5 match.
-    Entries on the CPU, a router or a port-channel are left out: they aren't front ports.
+    Port-channels are kept; entries on the CPU or a router are left out.
     """
-    found = {}
+    found = []
     for line in (output or "").splitlines():
         m = _MAC.search(line)
         if not m:
             continue
         rest = line[:m.start()] + " " + line[m.end():]
         port = _PORT.search(rest)
-        if not port or re.match(r"(?i)po|port-channel|ch\d|pc", port.group(1)):
+        if not port:
             continue
         vlan = next((t for t in rest[:port.start()].replace("*", " ").split()
                      if t.isdigit() and 1 <= int(t) <= 4094), "")
-        entry = (mac_dotted(m.group(1)), vlan)
-        bucket = found.setdefault(analyzer.match_key(port.group(1)), [])
-        if entry not in bucket:
-            bucket.append(entry)
+        found.append((mac_dotted(m.group(1)), vlan, port.group(1)))
+    return found
+
+
+def is_port_channel(port):
+    return bool(re.match(r"(?i)po|port-channel|ch\d|pc", port))
+
+
+def parse_mac_table(output):
+    """'show mac address-table' -> {port key: [(mac, vlan), ...]} for front ports.
+
+    The port key is analyzer.match_key, so Gi1/0/5, GigabitEthernet1/0/5 and gi1/0/5 match.
+    Entries on the CPU, a router or a port-channel are left out: they aren't front ports.
+    """
+    found = {}
+    for mac, vlan, port in mac_sightings(output):
+        if is_port_channel(port):
+            continue
+        bucket = found.setdefault(analyzer.match_key(port), [])
+        if (mac, vlan) not in bucket:
+            bucket.append((mac, vlan))
     return found
 
 

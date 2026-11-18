@@ -109,7 +109,8 @@
           (where ? where + " (" + s.address + ")" : s.address) + " · " + KIND[s.type]));
       });
       sel.appendChild(el("option", { value: "__other" }, "Another address…"));
-      var last = recall("topologyStack");
+      var asked = new URLSearchParams(location.search).get("address");   // from the Network map's "Draw this stack"
+      var last = asked || recall("topologyStack");
       sel.value = last && Array.prototype.some.call(sel.options, function (o) { return o.value === last; }) ? last : sel.options[0].value;
       syncManual();
       $("#protocol").value = (state.settings && state.settings.default_protocol) || "telnet";
