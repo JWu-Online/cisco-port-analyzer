@@ -145,37 +145,25 @@ The CSVs are saved in `data\docs\<date-time>\`, and earlier runs stay listed on 
 
 ## Network map
 
-Click **Network map** at the top of the page to draw every switch **Observium** monitors in Cisco's three-layer model: **core** at the top, **distribution** in the middle, **access** at the bottom with each building's closets hanging off the distribution switches they're plugged into. The links are the CDP/LLDP neighbours Observium has already found, so no switch is logged into and it takes seconds.
+Click **Network map** at the top of the page to see **which of your switches connect to which**. Each switch on your switch list is logged into once (several at a time) and asked who it's plugged into, using CDP and LLDP. **Only switches are drawn**: the ones on your list, plus any other switch they see whose address is in **Also draw switches found in** (`10.0.0.0/16` to start with; `10.0.x.x` works too, and several ranges can be separated with commas). Those extra switches are drawn with a **dashed outline** and say "not on your list": they aren't logged into, so you only see their links to your switches. Routers, phones, access points, wireless controllers and switches outside the range are left out. Empty the range to draw only your list.
 
-**Drawing one:** enter the Observium server, the database username and password, and click **Draw the map** (**Test connection** checks the login first). The map opens in a new tab and is saved in `data\network\pages\`, so earlier maps stay listed. The password is used for that one read and never saved; the other fields are remembered. Fill in **Observium website** too and every switch gets an **Open in Observium** button. **See a made-up campus** shows what a map looks like without Observium.
+**Drawing one:** pick which switches (all of them, or one building), enter the login like on the main page, and click **Draw the map**. The map opens in a new tab and is saved in `data\network\pages\`, so earlier maps stay listed. Passwords are used for that run only and never saved. **See a made-up campus** shows what a map looks like without logging in anywhere.
+
+**How it's laid out:** the **Nexus switches are the core** at the top (they do distribution too, so it's labelled **Core / distribution**), and every other switch is **access**, grouped by building underneath. A closet plugged into another closet (a daisy chain) hangs under that one. If a switch is in the wrong layer, click it and pick the right one; that's saved (in `data\network\layers.json`) and every map uses it from then on. **Automatic** puts it back.
 
 **Finding your way around a big map:**
-- **Building**: one building, with the distribution and core switches it hangs off.
-- **Distribution switch**: one distribution switch (and its partner, if they're a pair), the core above it and the closets below it.
+- **Building**: one building, with the core switches it's plugged into.
 - **Find**: type a name, address or model to highlight it; press **Enter** (or pick a name from the list) to show only that switch and what it's plugged into. **Show everything** goes back.
-- **Show Core / Distribution / Access**: hide a whole layer, for example access, to see just the backbone.
-- **Collapse closets**: each group of closets becomes one box ("10 closet switches"); click a box to open it and **▴ Collapse** to close it again. It starts on when there are more than 30 closet switches.
-- **Neighbours Observium doesn't monitor**: show or hide routers and switches it sees but doesn't poll (drawn dashed). Phones, access points and servers are always left out.
-- **Hover** a switch to light up its links and see its ports; hover a line for the ports at each end. **Click** a switch for its details, every link, **Show only this and its links**, **Draw this stack** (Cisco Catalyst and Dell switches on your switch list) and **Open in Observium**.
+- **Show Core / Access**: hide a whole layer, for example access, to see just the core. **Not on your list** hides or shows the dashed switches.
+- **Collapse closets**: each building's closets become one box ("10 closet switches"); click a box to open it and **▴ Collapse** to close it again. It starts on when there are more than 30 closet switches.
+- **Hover** a switch to light up its links and see its ports; hover a line for the ports at each end. **Click** a switch for its details, every link (port here, the switch it goes to, their port), **Show only this and its links** and **Draw this stack** (Cisco Catalyst and Dell switches).
 - **Fit**, **+** and **-** zoom; **Print / Save PDF** prints what's on screen on one landscape page.
 
-**Setting up database access (once, on the Observium server).** Observium Community Edition has no API, so the map reads its MySQL database directly, read-only, and only three tables: `devices`, `ports` and `neighbours`. The database normally only accepts connections from the server itself, so someone with root on it does this once (use your PC's IP address, or its subnet like `'10.1.2.%'` if it changes):
-1. Make a user that can only read those three tables, only from your PC:
-   ```
-   sudo mysql
-   CREATE USER 'portanalyzer'@'10.1.2.3' IDENTIFIED BY 'a long password';
-   GRANT SELECT ON observium.devices    TO 'portanalyzer'@'10.1.2.3';
-   GRANT SELECT ON observium.ports      TO 'portanalyzer'@'10.1.2.3';
-   GRANT SELECT ON observium.neighbours TO 'portanalyzer'@'10.1.2.3';
-   ```
-2. Let MySQL listen on the network: in its config (often `/etc/mysql/mariadb.conf.d/50-server.cnf` or `/etc/mysql/mysql.conf.d/mysqld.cnf`) change `bind-address = 127.0.0.1` to the server's own IP, then `sudo systemctl restart mysql` (or `mariadb`).
-3. Only let your PC reach port 3306, for example `sudo ufw allow from 10.1.2.3 to any port 3306 proto tcp`.
+**How the links are found:** each link is usually reported by both ends and is drawn once; a thick line with ×2 means two or more links between the same switches. Dell and Aruba switches only speak LLDP, and a Cisco only sees them if it runs LLDP (`lldp run`). A switch on your list that nothing reports is looked for by its MAC address in the other switches' MAC tables (and, on Cisco, the ARP table) and drawn with a **dashed line** to the port it was found on.
 
-The browser's "Not secure" warning on Observium's website doesn't matter here: the map talks to the database, not the website.
+**Notes at the top of the map** tell you about anything to check: a switch that refused the login (still drawn where its neighbours say it is, with a red **!**), a switch on your list that isn't linked to anything, the switches drawn dashed, and any neighbour that **calls itself a switch but is outside the range**. That last one is named so you can add it to the switch list if it's really yours; it isn't drawn. A dashed switch is put in the building of the closet it's plugged into; one plugged straight into the core goes in a "Not on your list" group at the end.
 
-**Buildings** come from the switch list on the Port Analyzer page, matched by address or name; anything not on it shows Observium's location. **Layers** are decided by model first (Nexus 7000/9500 and Catalyst 6500/6800/9600 are core; Catalyst 4500/9400/9500 and Nexus 5000/3000 are distribution; Catalyst 2960/3560-3850/9200/9300, Dell PowerConnect and Aruba S3500 are access; firewalls and routers go with the core). A switch with no known model is placed by where it sits. **If a switch is in the wrong layer**, click it and pick the right one; that's saved (in `data\network\layers.json`) and every map uses it from then on. **Automatic** puts it back.
-
-A switch Observium shows as down has a red **!**. A switch with no links at all is listed at the top: Observium learns links from CDP/LLDP, and a Cisco only sees a Dell or Aruba neighbour if it runs LLDP (`lldp run`).
+Mapping just one building still draws the core switches it's plugged into, as yours, from the switch list.
 
 ## How it knows when a port was last used
 
@@ -235,8 +223,8 @@ analyzer.py         reading each switch type's ports, deciding Inactive/Unsure/A
 switches.py         logging in over SSH/telnet for each switch type
 report.py           the Excel report
 portdocs.py         Port documentation: every port of every switch, with MAC addresses, as CSVs
-network.py          Network map: reads Observium's database (devices, ports, neighbours), core/distribution/access layers
-network_demo.py     the made-up campus (as Observium's tables) for the sample map and the tests
+network.py          Network map: CDP/LLDP from the switches on the list, plus unlisted switches in an address range, Nexus = core
+network_demo.py     the made-up campus (switch outputs) for the sample map and the tests
 topology.py         Stack topology: reading a Cisco or Dell stack, deciding each port, PoE and error checks, the cable test, Cisco/Dell config translation, the saved page
 topology_demo.py    made-up Cisco and Dell stacks for the example pages and the tests
 templates/, static/ the pages

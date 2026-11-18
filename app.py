@@ -46,8 +46,8 @@ job = analyzer.Job()
 job_lock = threading.Lock()
 docs_job = analyzer.Job()          # Port documentation runs separately from the port check
 docs_lock = threading.Lock()
-net_lock = threading.Lock()        # one Network map drawn at a time
-OBSERVIUM_CONNECT = None           # tests put a pretend database here
+net_job = analyzer.Job()           # and so does the Network map
+net_lock = threading.Lock()
 
 
 @app.before_request
@@ -485,69 +485,49 @@ def network_form():
     return render_template("network_form.html")
 
 
-def _observium_args(payload):
-    """The connection fields from the page -> (args for network.connect_observium, problems)."""
-    args = {"host": str(payload.get("host", "")).strip(), "port": str(payload.get("port", "") or "3306").strip(),
-            "database": str(payload.get("database", "") or "observium").strip(),
-            "user": str(payload.get("user", "")).strip(), "password": str(payload.get("password", ""))}
-    problems = []
-    if not args["host"]:
-        problems.append("Enter the Observium server's address.")
-    if not args["port"].isdigit() or not 0 < int(args["port"]) < 65536:
-        problems.append("The port must be a number (MySQL's is usually 3306).")
-    if not args["user"] or not args["password"]:
-        problems.append("Enter the database username and password.")
-    if not re.fullmatch(r"[\w$-]{1,64}", args["database"]):
-        problems.append("That isn't a database name.")
-    return args, problems
-
-
-@app.get("/api/network/connection")
-def network_connection():
-    """The connection fields saved last time (never the password)."""
-    return jsonify({"ok": True, "connection": network.load_connection(NETWORK_DIR)})
-
-
-@app.post("/api/network/test")
-def network_test():
+@app.post("/api/network/run")
+def network_run():
+    global net_job
     payload = request.json or {}
-    args, problems = _observium_args(payload)
-    if problems:
-        return jsonify({"ok": False, "problems": problems}), 400
-    try:
-        conn = (OBSERVIUM_CONNECT or network.connect_observium)(**args)
-        try:
-            counts = network.count_observium(conn)
-        finally:
-            conn.close()
-    except network.ObserviumError as exc:
-        return jsonify({"ok": False, "problems": [str(exc)]}), 502
-    except Exception as exc:
-        return jsonify({"ok": False, "problems": [f"Couldn't connect: {sw.friendly_error(exc)}"]}), 502
-    network.save_connection(NETWORK_DIR, {**args, "web": payload.get("web", "")})
-    return jsonify({"ok": True, **counts})
-
-
-@app.post("/api/network/draw")
-def network_draw():
-    """Read Observium's database and draw the map. Takes a few seconds, so no background job."""
-    payload = request.json or {}
-    args, problems = _observium_args(payload)
-    web = str(payload.get("web", "")).strip()
-    if web and not re.match(r"^https?://", web):
-        problems.append("The Observium web address should start with https:// (or http://).")
-    if problems:
-        return jsonify({"ok": False, "problems": problems}), 400
     with net_lock:
+        if net_job.state == "running":
+            return jsonify({"ok": False, "problems": ["A map is already being drawn."]}), 409
+        problems = []
+        chosen, label = pick_switches(str(payload.get("scope", "")), load_switches())
+        if not chosen:
+            problems.append("Add your switches on the Port Analyzer page first." if not load_switches()
+                            else "No switches match that choice.")
+        logins = logins_from(payload)
+        used = {s["protocol"] for s in chosen}
+        if "telnet" in used and not logins["telnet"].password:
+            problems.append("Enter the password.")
+        if "ssh" in used and not logins["ssh"].password:
+            problems.append("Enter the SSH password." if payload.get("ssh_different") else "Enter the password.")
         try:
-            data, path = network.draw_from_observium(args, load_switches(), NETWORK_DIR, web=web,
-                                                     connect=OBSERVIUM_CONNECT)
-        except network.ObserviumError as exc:
-            return jsonify({"ok": False, "problems": [str(exc)]}), 502
-        except Exception as exc:
-            return jsonify({"ok": False, "problems": [f"Couldn't draw the map: {sw.friendly_error(exc)}"]}), 502
-    network.save_connection(NETWORK_DIR, {**args, "web": web})
-    return jsonify({"ok": True, "file": path.name, "summary": data["summary"]})
+            also_draw = network.parse_ranges(str(payload.get("also_draw", ""))[:500])
+        except ValueError as exc:
+            problems.append(str(exc))
+        problems = list(dict.fromkeys(problems))
+        if problems:
+            return jsonify({"ok": False, "problems": problems}), 400
+        net_job = analyzer.Job()
+        threading.Thread(target=network.run_job,
+                         args=(net_job, chosen, logins, load_settings(), NETWORK_DIR, DEBUG_DIR, label),
+                         kwargs={"also_draw": also_draw, "whole_list": load_switches()},
+                         daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/network/stop")
+def network_stop():
+    net_job.stop_requested.set()
+    net_job.log("Stopping after the switches already in progress finish...", "warn")
+    return jsonify({"ok": True})
+
+
+@app.get("/api/network/job")
+def network_status():
+    return jsonify(net_job.snapshot(int(request.args.get("since", 0))))
 
 
 @app.get("/api/network/pages")
