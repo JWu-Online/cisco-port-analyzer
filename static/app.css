@@ -355,6 +355,7 @@ tbody tr:last-child td { border-bottom: none; }
 
 /* ---------- stack topology ---------- */
 .topbar-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.topbar-links { display: flex; gap: 8px; flex-wrap: wrap; }
 a.link { text-decoration: none; }
 a.link:hover { text-decoration: underline; }
 .topbar > a.link { display: inline-block; margin-bottom: 6px; font-size: 0.9rem; }

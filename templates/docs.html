@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Port documentation - Port Analyzer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Crect x='6' y='12' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='13' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='20' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='6' y='19' width='5' height='4' fill='%234A5662'/%3E%3Crect x='13' y='19' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='20' y='19' width='5' height='4' fill='%23D9822B'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+  <style>
+    .runs { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+    .runs > li { border: 1px solid var(--line-soft); border-radius: 6px; padding: 10px 14px; display: grid; gap: 6px; }
+    .runs > li.fresh { border-color: var(--found); box-shadow: inset 3px 0 0 var(--found); }
+    .run-head { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+    .run-head strong { font-size: 1rem; }
+    .run-links { display: flex; flex-wrap: wrap; gap: 8px; }
+    .run-failed { font-size: 0.85rem; color: var(--danger); margin: 0; padding-left: 18px; }
+    .cols { display: grid; grid-template-columns: max-content 1fr; gap: 4px 18px; margin: 10px 0 0; font-size: 0.9rem; }
+    .cols dt { font-weight: 600; }
+    .cols dd { margin: 0; color: var(--ink-2); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="link" href="/">&larr; Port Analyzer</a>
+    <h1>Port documentation</h1>
+    <p>CSVs of every port on every switch in your list: switch, port, description, VLANs, use, power and the MAC addresses on it.</p>
+  </header>
+
+  <main>
+    <div class="setup">
+      <section class="panel" aria-labelledby="whatTitle">
+        <div class="panel-head"><h2 id="whatTitle">Which switches</h2></div>
+        <label class="field"><span>Switches</span><select id="scope"></select></label>
+        <label class="field"><span>Call a port unused after</span>
+          <span class="months"><input id="months" type="number" min="0.5" max="120" step="0.5" aria-label="Months"> months</span>
+        </label>
+        <p class="hint" id="scopeHint"></p>
+        <p class="hint">Uses the switch list from the Port Analyzer page. Cisco Catalyst and Dell ports get everything the
+          Stack topology page shows; Cisco Nexus and Aruba ports get the same columns where those switches have the data.</p>
+      </section>
+
+      <section class="panel" aria-labelledby="runTitle">
+        <div class="panel-head">
+          <h2 id="runTitle">Log in and make the CSVs</h2>
+          <p>Passwords are only kept in memory for this run, never saved.</p>
+        </div>
+        <div class="login-grid">
+          <label class="field"><span>Username</span><input id="user" autocomplete="username"></label>
+          <label class="field"><span>Password</span><input id="pass" type="password" autocomplete="current-password"></label>
+          <label class="field"><span>Enable password</span><input id="secret" type="password" autocomplete="off" placeholder="Optional"></label>
+        </div>
+        <label class="check"><input type="checkbox" id="sshDifferent"> <span>SSH switches use a different login</span></label>
+        <div class="login-grid" id="sshLogin" hidden>
+          <label class="field"><span>SSH username</span><input id="sshUser" autocomplete="off"></label>
+          <label class="field"><span>SSH password</span><input id="sshPass" type="password" autocomplete="off"></label>
+          <label class="field"><span>SSH enable password</span><input id="sshSecret" type="password" autocomplete="off" placeholder="Optional"></label>
+        </div>
+        <div class="actions">
+          <button class="btn primary big" id="runBtn">Make CSVs</button>
+          <button class="btn" id="stopBtn" hidden>Stop</button>
+        </div>
+        <div class="notice" id="notes" hidden></div>
+        <div class="progress" id="progressBox" hidden>
+          <div class="progress-line"><span>Reading switches</span><span id="progressCount" class="mono"></span></div>
+          <div class="bar"><div class="fill" id="progressFill"></div></div>
+        </div>
+        <ol class="log mono" id="log" aria-live="polite"></ol>
+      </section>
+    </div>
+
+    <section class="panel" aria-labelledby="runsTitle">
+      <div class="panel-head">
+        <h2 id="runsTitle">CSVs</h2>
+        <p>Saved in your data folder (<span class="mono">data\docs</span>). Download one CSV with every switch, or a .zip with one CSV per switch.</p>
+      </div>
+      <ul class="runs" id="runs"></ul>
+      <p class="empty" id="runsEmpty">None yet.</p>
+      <details class="more">
+        <summary>What's in each row</summary>
+        <dl class="cols">
+          <dt>Switch, Address, Building, Location</dt><dd>The switch's name (from its prompt) and what your switch list says about it.</dd>
+          <dt>Member/slot, Port, Interface</dt><dd>Stack member (or chassis slot), the port number on it, and the full port name like Gi2/0/14.</dd>
+          <dt>Description</dt><dd>The port's description on the switch.</dd>
+          <dt>VLAN, VLAN name</dt><dd>The port's VLAN (on a Dell, its PVID), or Trunk.</dd>
+          <dt>Tagged VLANs</dt><dd>Other VLANs on the port: the voice VLAN, or the VLANs a trunk carries ("all" if it isn't limited).</dd>
+          <dt>Status, Speed, Duplex</dt><dd>Link up, no link, shut down or err-disabled, and what it linked at.</dd>
+          <dt>Result, Last active, Why</dt><dd>Active, Inactive or Unsure for the months you picked, the same way as the Stack topology page.</dd>
+          <dt>Issues, Power</dt><dd>Power and slow-connection problems, and what the port powers (Cisco Catalyst and Dell).</dd>
+          <dt>MAC addresses</dt><dd>Every MAC address the switch has learned on the port, as 0011.2233.4455. A MAC on a different VLAN (usually the phone on the voice VLAN) says which. Trunk ports just say "Trunk port".</dd>
+        </dl>
+      </details>
+    </section>
+  </main>
+
+  <script>
+  (function () {
+    "use strict";
+    var $ = function (s) { return document.querySelector(s); };
+    var state = { switches: [], logNext: 0, timer: null, fresh: "" };
+    function remember(k, v) { try { localStorage.setItem("pa." + k, v); } catch (e) { /* private window */ } }
+    function recall(k) { try { return localStorage.getItem("pa." + k); } catch (e) { return null; } }
+    function el(tag, props, text) {
+      var e = document.createElement(tag);
+      Object.keys(props || {}).forEach(function (k) { e.setAttribute(k, props[k]); });
+      if (text !== undefined) e.textContent = text;
+      return e;
+    }
+    function natural(a, b) { return String(a || "").localeCompare(String(b || ""), undefined, { numeric: true }); }
+    function plural(n, one, many) { return n + " " + (n === 1 ? one : many); }
+    function notice(kind, messages) {
+      var box = $("#notes");
+      box.textContent = "";
+      if (!messages || !messages.length) { box.hidden = true; return; }
+      box.className = "notice " + kind;
+      messages.forEach(function (m) { box.appendChild(el("p", {}, m)); });
+      box.hidden = false;
+    }
+    async function api(path, body) {
+      var opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+      try {
+        var res = await fetch(path, opts);
+        var data = await res.json();
+        return { ok: res.ok && data.ok !== false, data: data };
+      } catch (e) {
+        return { ok: false, data: { problems: ["Can't reach the app. Is the RunAnalyzer window still open?"] } };
+      }
+    }
+
+    // ---- which switches (same choices as the Port Analyzer page) ----
+    function inScope() {
+      var scope = $("#scope").value;
+      if (scope.indexOf("b:") === 0) return state.switches.filter(function (s) { return s.building === scope.slice(2); });
+      if (scope.indexOf("s:") === 0) return state.switches.filter(function (s) { return s.address === scope.slice(2); });
+      return state.switches;
+    }
+    function renderScope() {
+      var sel = $("#scope"), saved = state.switches;
+      sel.textContent = "";
+      sel.appendChild(el("option", { value: "" }, "Every switch (" + saved.length + ")"));
+      var counts = {};
+      saved.forEach(function (s) { if (s.building) counts[s.building] = (counts[s.building] || 0) + 1; });
+      var buildings = Object.keys(counts).sort(natural);
+      if (buildings.length) {
+        var g = el("optgroup", { label: "One building" });
+        buildings.forEach(function (b) { g.appendChild(el("option", { value: "b:" + b }, b + " (" + counts[b] + ")")); });
+        sel.appendChild(g);
+      }
+      if (saved.length) {
+        var g2 = el("optgroup", { label: "One switch" });
+        saved.slice().sort(function (a, b) {
+          return natural(a.building, b.building) || natural(a.location, b.location) || natural(a.address, b.address);
+        }).forEach(function (s) {
+          g2.appendChild(el("option", { value: "s:" + s.address },
+            (s.building ? s.building + ": " : "") + (s.location ? s.location + " (" + s.address + ")" : s.address)));
+        });
+        sel.appendChild(g2);
+      }
+      var last = recall("docsScope") || "";
+      sel.value = Array.prototype.some.call(sel.options, function (o) { return o.value === last; }) ? last : "";
+      hint();
+    }
+    function hint() {
+      var chosen = inScope(), kinds = {};
+      chosen.forEach(function (s) { kinds[s.type] = (kinds[s.type] || 0) + 1; });
+      var NAMES = { cisco_ios: "Cisco Catalyst", dell_powerconnect: "Dell", cisco_nxos: "Cisco Nexus", aruba_mas: "Aruba" };
+      var parts = Object.keys(kinds).map(function (k) { return kinds[k] + " " + (NAMES[k] || k); });
+      $("#scopeHint").textContent = state.switches.length
+        ? plural(chosen.length, "switch", "switches") + (parts.length ? ": " + parts.join(", ") : "") + "."
+        : "No switches yet. Add them on the Port Analyzer page under Switch list.";
+    }
+
+    // ---- earlier runs ----
+    async function loadRuns() {
+      var runs = (await api("/api/docs/runs")).data.runs || [];
+      var list = $("#runs");
+      list.textContent = "";
+      $("#runsEmpty").hidden = runs.length > 0;
+      runs.forEach(function (r) {
+        var li = el("li", { "class": r.run === state.fresh ? "fresh" : "" });
+        var head = el("div", { "class": "run-head" });
+        head.appendChild(el("strong", {}, r.created));
+        head.appendChild(el("span", { "class": "hint" }, r.scope + " · " + plural(r.switches, "switch", "switches") +
+          ", " + plural(r.ports, "port", "ports") + " · unused after " + r.months + " months"));
+        li.appendChild(head);
+        var links = el("div", { "class": "run-links" });
+        links.appendChild(el("a", { "class": "btn primary", href: "/port-docs/download/" + r.run + "/all" }, "One CSV, every switch"));
+        if (r.files && r.files.length) {
+          links.appendChild(el("a", { "class": "btn", href: "/port-docs/download/" + r.run + "/zip" },
+            "One CSV per switch (.zip, " + r.files.length + ")"));
+        }
+        li.appendChild(links);
+        if (r.failed && r.failed.length) {
+          var ul = el("ul", { "class": "run-failed" });
+          r.failed.forEach(function (f) {
+            ul.appendChild(el("li", {}, "Not included: " + (f.name !== f.address ? f.name + " (" + f.address + ")" : f.address) +
+              ". " + f.problem));
+          });
+          li.appendChild(ul);
+        }
+        list.appendChild(li);
+      });
+    }
+
+    // ---- running ----
+    function setRunning(running) {
+      $("#runBtn").disabled = running;
+      $("#runBtn").textContent = running ? "Reading switches…" : "Make CSVs";
+      $("#stopBtn").hidden = !running;
+      $("#stopBtn").disabled = false;
+      $("#progressBox").hidden = !running;
+    }
+    async function poll() {
+      clearTimeout(state.timer);
+      var data = (await api("/api/docs/job?since=" + state.logNext)).data;
+      if (!data || !data.state) { state.timer = setTimeout(poll, 2000); return; }
+      var log = $("#log");
+      var atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
+      data.lines.forEach(function (line) {
+        var li = el("li", { "class": line.level });
+        li.appendChild(el("time", {}, line.t));
+        li.appendChild(el("span", {}, line.msg));
+        log.appendChild(li);
+      });
+      if (atBottom) log.scrollTop = log.scrollHeight;
+      state.logNext = data.next;
+      var p = data.progress;
+      $("#progressCount").textContent = p.total ? p.done + " of " + p.total : "";
+      $("#progressFill").style.width = p.total ? Math.round(100 * p.done / p.total) + "%" : "0";
+      if (data.state === "running") { setRunning(true); state.timer = setTimeout(poll, 1000); return; }
+      setRunning(false);
+      if (data.state === "done" && data.report_file) {
+        state.fresh = data.report_file;
+        await loadRuns();
+      }
+    }
+    async function start() {
+      remember("user", $("#user").value);
+      remember("sshUser", $("#sshUser").value);
+      remember("docsScope", $("#scope").value);
+      var body = {
+        scope: $("#scope").value, months: $("#months").value,
+        username: $("#user").value, password: $("#pass").value, secret: $("#secret").value,
+        ssh_different: $("#sshDifferent").checked,
+        ssh_username: $("#sshUser").value, ssh_password: $("#sshPass").value, ssh_secret: $("#sshSecret").value
+      };
+      var r = await api("/api/docs/run", body);
+      if (!r.ok) { notice("error", r.data.problems || ["Couldn't start."]); return; }
+      notice("", []);
+      $("#log").textContent = "";
+      state.logNext = 0;
+      setRunning(true);
+      poll();
+    }
+
+    async function init() {
+      var data = (await api("/api/state")).data;
+      state.switches = data.switches || [];
+      $("#months").value = (data.settings && data.settings.months) || 6;
+      $("#user").value = recall("user") || "";
+      $("#sshUser").value = recall("sshUser") || "";
+      $("#sshDifferent").checked = recall("sshDifferent") === "1";
+      $("#sshLogin").hidden = !$("#sshDifferent").checked;
+      renderScope();
+      await loadRuns();
+      var job = (await api("/api/docs/job?since=0")).data;
+      if (job && job.state === "running") { state.logNext = 0; poll(); }     // a run started before a reload
+    }
+
+    $("#scope").addEventListener("change", hint);
+    $("#sshDifferent").addEventListener("change", function () {
+      $("#sshLogin").hidden = !$("#sshDifferent").checked;
+      remember("sshDifferent", $("#sshDifferent").checked ? "1" : "0");
+    });
+    $("#runBtn").addEventListener("click", start);
+    $("#stopBtn").addEventListener("click", function () { $("#stopBtn").disabled = true; api("/api/docs/stop", {}); });
+    $("#pass").addEventListener("keydown", function (e) { if (e.key === "Enter") start(); });
+    init();
+  })();
+  </script>
+</body>
+</html>

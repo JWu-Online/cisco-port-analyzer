@@ -19,6 +19,7 @@ from pathlib import Path
 from flask import Flask, Response, abort, jsonify, render_template, request
 
 import analyzer
+import portdocs
 import report
 import switches as sw
 import topology
@@ -30,6 +31,7 @@ DEBUG_DIR = DATA_DIR / "debug"
 SWITCHES_FILE = DATA_DIR / "switches.csv"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 TOPOLOGY_DIR = DATA_DIR / "topology"
+DOCS_DIR = DATA_DIR / "docs"
 
 DEFAULT_SETTINGS = {"months": 6, "default_protocol": "telnet", "parallel": 10, "timeout": 20}
 SWITCH_FIELDS = ["address", "type", "protocol", "building", "location"]
@@ -39,6 +41,8 @@ app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 PORT = int(os.environ.get("PA_PORT", "5000"))
 job = analyzer.Job()
 job_lock = threading.Lock()
+docs_job = analyzer.Job()          # Port documentation runs separately from the port check
+docs_lock = threading.Lock()
 
 
 @app.before_request
@@ -394,6 +398,78 @@ def topology_demo():
     vendor = "dell_powerconnect" if request.args.get("type", "").lower().startswith("dell") else "cisco_ios"
     _, html, _ = topology.run_demo(save=False, vendor=vendor)
     return html
+
+
+# ---------------------------------------------------------------------------
+# Port documentation: CSVs of every port on every switch, with MAC addresses
+# ---------------------------------------------------------------------------
+@app.get("/port-docs")
+def docs_page():
+    return render_template("docs.html")
+
+
+@app.post("/api/docs/run")
+def docs_run():
+    global docs_job
+    payload = request.json or {}
+    with docs_lock:
+        if docs_job.state == "running":
+            return jsonify({"ok": False, "problems": ["CSVs are already being made."]}), 409
+        problems = []
+        try:
+            months = parse_months(payload.get("months", 6))
+        except (TypeError, ValueError):
+            months = None
+            problems.append("Months must be a number from 0.5 to 120.")
+        chosen, label = pick_switches(str(payload.get("scope", "")), load_switches())
+        if not chosen:
+            problems.append("Add your switches on the Port Analyzer page first." if not load_switches()
+                            else "No switches match that choice.")
+        logins = logins_from(payload)
+        used = {s["protocol"] for s in chosen}
+        if "telnet" in used and not logins["telnet"].password:
+            problems.append("Enter the password.")
+        if "ssh" in used and not logins["ssh"].password:
+            problems.append("Enter the SSH password." if payload.get("ssh_different") else "Enter the password.")
+        problems = list(dict.fromkeys(problems))
+        if problems:
+            return jsonify({"ok": False, "problems": problems}), 400
+        docs_job = analyzer.Job()
+        threading.Thread(target=portdocs.run_job,
+                         args=(docs_job, chosen, logins, months, load_settings(), DOCS_DIR, TOPOLOGY_DIR,
+                               DEBUG_DIR, label),
+                         daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/docs/stop")
+def docs_stop():
+    docs_job.stop_requested.set()
+    docs_job.log("Stopping after the switches already in progress finish...", "warn")
+    return jsonify({"ok": True})
+
+
+@app.get("/api/docs/job")
+def docs_status():
+    return jsonify(docs_job.snapshot(int(request.args.get("since", 0))))
+
+
+@app.get("/api/docs/runs")
+def docs_runs():
+    return jsonify({"runs": portdocs.list_runs(DOCS_DIR)})
+
+
+@app.get("/port-docs/download/<run>/<kind>")
+def docs_download(run, kind):
+    """kind: 'all' (one CSV, every switch) or 'zip' (one CSV per switch)."""
+    folder = portdocs.run_folder(DOCS_DIR, run)
+    if not folder or kind not in ("all", "zip"):
+        abort(404)
+    if kind == "all":
+        body, mimetype, name = (folder / "all-switches.csv").read_bytes(), "text/csv", f"port-docs-{run}.csv"
+    else:
+        body, mimetype, name = portdocs.zip_bytes(folder), "application/zip", f"port-docs-{run}-per-switch.zip"
+    return Response(body, mimetype=mimetype, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 # ---------------------------------------------------------------------------
