@@ -356,7 +356,7 @@ def parse_profile(lines, voice_id=""):
     """
     prof = {"description": "", "mode": "", "access_vlan": "", "voice_vlan": "", "native_vlan": "",
             "allowed": [], "shutdown": False, "portfast": False, "bpduguard": False, "general": False,
-            "other": []}
+            "tagged": [], "untagged": [], "other": []}
     for raw in lines or []:
         line = raw.strip()
         low = re.sub(r"\s+", " ", line.lower())
@@ -384,6 +384,8 @@ def parse_profile(lines, voice_id=""):
                 prof["voice_vlan"] = m.group(1)
             elif "allowed" in low:
                 prof["allowed"].append(m.group(1))
+                # Dell: 'add 20 untagged' / 'add 40 tagged' (tagged if not said); a trunk's allowed VLANs are tagged
+                prof["untagged" if low.endswith(" untagged") else "tagged"].append(m.group(1))
             else:
                 prof["native_vlan"] = m.group(1)
             continue
@@ -397,9 +399,51 @@ def parse_profile(lines, voice_id=""):
             prof["bpduguard"] = True
         else:
             prof["other"].append(line)
-    if prof["mode"] == "general":                        # Dell's general mode is closest to a trunk
-        prof["mode"], prof["general"] = "trunk", True
+    if prof["mode"] == "general":
+        prof["general"] = True
+        tagged, untagged = vlan_set(prof["tagged"]), vlan_set(prof["untagged"])
+        pvid = prof["native_vlan"] or (next(iter(untagged)) if len(untagged) == 1 else "")
+        voice = prof["voice_vlan"] or voice_id
+        if pvid and untagged <= {pvid} and tagged <= ({voice} if voice else set()):
+            # The usual Dell desk port: its PVID untagged, at most the voice VLAN tagged. That's an access port.
+            prof.update(mode="access", access_vlan=pvid, native_vlan="", allowed=[],
+                        voice_vlan=next(iter(tagged)) if tagged else prof["voice_vlan"])
+        else:                                            # anything more is closest to a trunk
+            prof["mode"] = "trunk"
     return prof
+
+
+def vlan_set(parts):
+    """['20', '30-32,40'] -> {'20', '30', '31', '32', '40'}."""
+    out = set()
+    for part in ",".join(parts).split(","):
+        m = re.fullmatch(r"\s*(\d+)\s*(?:-\s*(\d+))?\s*", part)
+        if m:
+            lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
+            out.update(str(v) for v in range(lo, min(hi, lo + 4094) + 1))
+    return out
+
+
+def dell_port_vlans(prof, in_config, untagged, tagged, voice_id):
+    """How to label a Dell port: (label, pvid, tagged VLANs).
+
+    The label is the PVID (the VLAN untagged traffic goes into), so a desk port with its voice VLAN
+    tagged reads as the desk's VLAN, not "trunk". Only a port carrying two or more tagged VLANs
+    besides the voice VLAN (an uplink, say) is labelled trunk. 'show vlan' wins over the config,
+    because it also shows the voice VLAN a phone was put on by itself.
+    """
+    pvid = ""
+    if prof:
+        pvid = prof["native_vlan"] if prof["mode"] == "trunk" else prof["access_vlan"]
+    if not pvid:
+        pvid = next(iter(untagged)) if len(untagged) == 1 else ("1" if in_config else "")
+    on_tag = set(tagged) or (vlan_set(prof["tagged"]) if prof else set())
+    on_tag.discard(pvid)
+    if prof and prof["voice_vlan"]:
+        on_tag.add(prof["voice_vlan"])
+    trunk_vlans = on_tag - {voice_id, prof["voice_vlan"] if prof else ""}
+    label = "trunk" if len(trunk_vlans) >= 2 else (pvid or "?")
+    return label, pvid, sorted(on_tag, key=int)
 
 
 def basic_profile(desc, vlan):
@@ -437,6 +481,12 @@ def render_profile(prof, vendor):
             lines.append(f" switchport trunk allowed vlan {vlans}" if cisco else f"switchport trunk allowed vlan add {vlans}")
         if prof["general"] and cisco:
             notes.append("It was in Dell 'general' mode, copied as a trunk: check its VLANs")
+    elif prof["general"] and cisco:
+        lines.append(" switchport mode access")
+        lines.append(f" switchport access vlan {prof['access_vlan']}")
+        notes.append(f"It was in Dell 'general' mode with PVID {prof['access_vlan']}"
+                     + (f" and voice VLAN {prof['voice_vlan']} tagged" if prof["voice_vlan"] else "")
+                     + ", copied as an access port" + (" with that voice VLAN" if prof["voice_vlan"] else ""))
     elif prof["mode"] == "access" or prof["access_vlan"]:
         lines.append(f"{pre}switchport mode access")
         if prof["access_vlan"]:
@@ -968,6 +1018,7 @@ def build_dell_stack(outputs, host, months=6, history=None, now=None, where=""):
         if len(words) >= 4 and analyzer.DELL_PORT.match(line):
             link_info[normalize_intf(words[0])] = (words[1], words[2], words[3])
     issue_count = {"ports": 0, "power": 0, "slow": 0}
+    tagged_seen = set()                  # VLANs ports carry tagged (the voice VLAN), so their names show too
 
     if not ports_by:
         raise ValueError("Read the switch, but no ports could be read. Is it a Dell PowerConnect 5500?")
@@ -1010,16 +1061,9 @@ def build_dell_stack(outputs, host, months=6, history=None, now=None, where=""):
                 cfg = {"ifname": long_name, "lines": [], "removed": 0}
             prof = parse_profile(cfg["lines"], voice_id) if cfg else None
             state = "connected" if connected else ("disabled" if prof and prof["shutdown"] else "notconnect")
-            if prof and prof["mode"] == "trunk":
-                vlan = "trunk"
-            elif prof and prof["access_vlan"]:
-                vlan = prof["access_vlan"]
-            elif tagged.get(name):
-                vlan = "trunk"
-            elif len(untagged.get(name, ())) == 1:
-                vlan = next(iter(untagged[name]))
-            else:
-                vlan = "1" if cfg is not None else "?"
+            vlan, pvid, port_tagged = dell_port_vlans(prof, cfg is not None, untagged.get(name, set()),
+                                                      tagged.get(name, set()), voice_id)
+            tagged_seen.update(port_tagged)
             total = totals.get(name)
             hist = port_history.get(name, {})
             activity, last_active, why = evaluate_counter_port(now, window, months, connected, total,
@@ -1043,7 +1087,7 @@ def build_dell_stack(outputs, host, months=6, history=None, now=None, where=""):
             ptype, duplex, speed = link_info.get(name, ("", "", ""))
             ports_out.append({
                 "num": port, "name": b["port"], "desc": b.get("description", ""),
-                "status": state, "vlan": vlan, "ptype": ptype,
+                "status": state, "vlan": vlan, "ptype": ptype, "pvid": pvid, "tagged": port_tagged,
                 "speed": speed if connected else "", "duplex": duplex if connected else "",
                 "activity": activity,
                 "last_active": last_active.strftime("%Y-%m-%d") if last_active else "",
@@ -1084,7 +1128,8 @@ def build_dell_stack(outputs, host, months=6, history=None, now=None, where=""):
         "generated": now.strftime("%Y-%m-%d %H:%M"),
         "months": months, "summary": summary, "warnings": warnings,
         "vlans": _vlan_legend(vlan_counts), "members": members_out,
-        "vlan_names": {v: vlan_names[v] for v in sorted(vlan_counts, key=lambda v: (len(v), v)) if v in vlan_names},
+        "vlan_names": {v: vlan_names[v] for v in sorted(set(vlan_counts) | tagged_seen, key=lambda v: (len(v), v))
+                       if v in vlan_names},
         "has_config": bool(configs), "links": [],
         "history_runs": history["runs"], "history_since": history["first_run"][:10],
     }

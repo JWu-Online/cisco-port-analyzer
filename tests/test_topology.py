@@ -266,6 +266,44 @@ snmp-server community FAKECOMM ro
                 " switchport mode trunk" in lines and " switchport trunk native vlan 60" in lines
                 and " switchport trunk allowed vlan 60,99" in lines
                 and any("general" in n for n in notes) and any("power inline never" in n for n in notes), (lines, notes))
+    general_voice = ["description \"Rm 102 Desk\"", "switchport mode general", "switchport general pvid 20",
+                     "switchport general allowed vlan add 20 untagged", "switchport general allowed vlan add 40 tagged"]
+    lines, notes = T.render_profile(T.parse_profile(general_voice, voice_id="40"), "cisco_ios")
+    ok &= check("Dell general mode, PVID 20 + voice VLAN 40 tagged -> Cisco access port with a voice VLAN",
+                lines == [" description Rm 102 Desk", " switchport mode access", " switchport access vlan 20",
+                          " switchport voice vlan 40"] and "PVID 20" in notes[0], (lines, notes))
+    lines, notes = T.render_profile(T.parse_profile(cfg["Gi1/0/5"]["lines"], voice_id="40"), "cisco_ios")
+    ok &= check("...but a non-voice VLAN tagged (99) still copies as a trunk", " switchport mode trunk" in lines, lines)
+
+    print("\nDell VLAN labels: the PVID, not 'trunk'")
+    def label(lines, untagged=(), tagged=(), voice="40", in_config=True):
+        prof = T.parse_profile(lines, voice) if lines is not None else None
+        return T.dell_port_vlans(prof, in_config, set(untagged), set(tagged), voice)
+    ok &= check("general mode desk port with the voice VLAN tagged -> its PVID",
+                label(general_voice[1:], {"20"}, {"40"}) == ("20", "20", ["40"]))
+    ok &= check("access port the phone put in the voice VLAN -> its access VLAN",
+                label(["switchport access vlan 30", "voice vlan enable"], {"30"}, {"40"}) == ("30", "30", ["40"]))
+    ok &= check("trunk mode with only the voice VLAN tagged -> its native VLAN",
+                label(["switchport mode trunk", "switchport trunk native vlan 20",
+                       "switchport trunk allowed vlan add 40"], {"20"}, {"40"}) == ("20", "20", ["40"]))
+    ok &= check("an AP's PVID 60 with management 99 tagged -> 60",
+                label(["switchport mode general", "switchport general pvid 60", "switchport general allowed vlan add 60 untagged",
+                       "switchport general allowed vlan add 99 tagged"], {"60"}, {"99"}) == ("60", "60", ["99"]))
+    ok &= check("an uplink with several VLANs tagged is still a trunk",
+                label(["switchport mode trunk", "switchport trunk allowed vlan add 20,30-31,99"], {"1"},
+                      {"20", "30", "31", "99"}) == ("trunk", "1", ["20", "30", "31", "99"]))
+    ok &= check("no config read: the one untagged VLAN from 'show vlan'",
+                label(None, {"30"}, {"40"}, in_config=False) == ("30", "30", ["40"]))
+    ok &= check("nothing set on the port: VLAN 1", label([], (), ()) == ("1", "1", []))
+    ddata, _ = T.build_stack(dell_demo_outputs(), "demo-dell", 6, now=NOW, vendor="dell_powerconnect")
+    dports = [p for m in ddata["members"] for p in m["ports"] if not p.get("absent")]
+    desks = [p for p in dports if p["desc"].startswith("Rm B-")]
+    ok &= check("Dell demo: desk ports (some general mode) read as VLAN 20 with 40 tagged, only real trunks say trunk",
+                desks and all(p["vlan"] == "20" and p["tagged"] == ["40"] for p in desks)
+                and len([p for p in dports if p["vlan"] == "trunk"]) == 4
+                and all(len(p["tagged"]) >= 2 for p in dports if p["vlan"] == "trunk"),
+                [(p["name"], p["vlan"], p["tagged"]) for p in desks if p["vlan"] != "20"])
+
     cisco = [" description " + "x" * 70, " switchport access vlan 30", " switchport mode access",
              " switchport voice vlan 40", " spanning-tree portfast edge", " power inline never"]
     lines, notes = T.render_profile(T.parse_profile(cisco), "dell_powerconnect")

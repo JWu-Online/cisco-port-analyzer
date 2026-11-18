@@ -119,6 +119,8 @@ Each drawing remembers what it saw in `data\topology\history`. If you draw the s
 
 **Dell PowerConnect is different:** it doesn't record when a port was last used, only how many packets each port has moved since the switch started. So a port is Active if its link is up, or it had traffic and the switch started less than the months you picked ago, or its count went up since an earlier drawing. It's Inactive if it has had no traffic at all since a start longer ago than that, or its count hasn't moved across drawings that cover that long. On the first drawing, ports that had traffic at some point but are down now show as **Unsure**. Draw the stack again every week or two and they sort themselves out. The Dell's stack cables aren't drawn.
 
+**Dell VLAN labels:** a Dell port shows its **PVID** (the VLAN its untagged traffic goes into), so a desk port with the voice VLAN tagged on it, whether set up in general mode or with `voice vlan enable`, shows as its data VLAN, not as a trunk. Hover over it to see the VLANs it also carries tagged (like `40 VOICE-PHONES`). Only a port with two or more tagged VLANs besides the voice VLAN (an uplink or an access point trunk) shows as **TRK**. When you copy a general-mode desk port (PVID untagged, at most the voice VLAN tagged) to a Cisco, it becomes an access port with that voice VLAN instead of a trunk.
+
 From the command line:
 ```
 .venv\Scripts\python topology.py 10.99.4.11 -u admin -p telnet -m 6
