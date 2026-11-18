@@ -387,11 +387,19 @@ def dell_demo_outputs():
                 lines += ["switchport mode trunk", "switchport trunk allowed vlan add 20,60,99"]
                 for v in ("20", "60", "99"):
                     tagged.setdefault(v, []).append(name)
+            elif vlan == "20" and port % 2 == 0:
+                # Desk port set up the other common Dell way: general mode, PVID 20, voice VLAN 40 tagged
+                lines += ["switchport mode general", "switchport general pvid 20",
+                          "switchport general allowed vlan add 20 untagged",
+                          "switchport general allowed vlan add 40 tagged"]
+                untagged.setdefault("20", []).append(name)
+                tagged.setdefault("40", []).append(name)
             elif vlan != "1":
                 lines.append(f"switchport access vlan {vlan}")
                 untagged.setdefault(vlan, []).append(name)
                 if vlan == "20":
                     lines.append("voice vlan enable")
+                    tagged.setdefault("40", []).append(name)     # the Dell puts it in the voice VLAN, tagged
             else:
                 untagged.setdefault("1", []).append(name)
             if not uplink and vlan != "trunk" and rng.random() < 0.7:

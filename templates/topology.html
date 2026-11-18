@@ -663,6 +663,12 @@
   function legendKey(v) { return slot(v) === "other" ? "__other" : v; }
   function vlanShort(v) { return v === "trunk" ? "TRK" : v === "routed" ? "RTD" : v; }
   function vlanLong(v) { return v === "trunk" ? "Trunk" : v === "routed" ? "Routed" : "VLAN " + v; }
+  // Dell ports are labelled by their PVID; these show the VLANs they also carry tagged (like the voice VLAN)
+  function vlanWithName(v) { return vlanName(v) ? v + " " + vlanName(v) : v; }
+  function taggedText(p, most) {
+    var t = p.tagged || [], shown = most && t.length > most ? t.slice(0, most) : t;
+    return shown.map(vlanWithName).join(", ") + (shown.length < t.length ? " and " + (t.length - shown.length) + " more" : "");
+  }
   // VLAN names come from 'show vlan brief'. Unnamed VLANs just show their number.
   var NAMES = D.vlan_names || {};
   function vlanName(v) { return NAMES[v] || ""; }
@@ -952,6 +958,8 @@
     var dl = el("dl");
     function row(k, v, soft) { dl.appendChild(el("dt", null, k)); dl.appendChild(el("dd", soft ? "soft" : null, v)); }
     row("VLAN", vlanName(p.vlan) ? p.vlan + " · " + vlanName(p.vlan) : vlanLong(p.vlan).replace("VLAN ", ""));
+    if (p.vlan === "trunk" && p.pvid) row("PVID", vlanName(p.pvid) ? p.pvid + " · " + vlanName(p.pvid) : p.pvid);
+    if (p.tagged && p.tagged.length) row("Tagged", taggedText(p, 4), true);
     row("Result", LABEL[p.activity]);
     row("Why", p.why, true);
     if (p.last_active) row("Last active", p.last_active);
@@ -1021,12 +1029,12 @@
       return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
     }
     var lines = [[UNIT, "Port", "Interface", "Description", "VLAN", "VLAN name", "Status", "Result", "Last active", "Why",
-                  "Issues", "Power"].join(",")];
+                  "Issues", "Power", "Tagged VLANs"].join(",")];
     all.filter(matches).forEach(function (i) {
       var p = i.p;
       var power = (p.notes || []).filter(function (n) { return /^Powering /.test(n); }).join("; ").replace(/^Powering /, "");
       lines.push([i.m.number, p.num, p.name, p.desc, p.vlan, vlanName(p.vlan), STATUS[p.status] || p.status,
-                  LABEL[p.activity], p.last_active, p.why, issueTitles(p), power].map(cell).join(","));
+                  LABEL[p.activity], p.last_active, p.why, issueTitles(p), power, (p.tagged || []).join(" ")].map(cell).join(","));
     });
     var a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([lines.join("\r\n")], { type: "text/csv" }));
@@ -1383,6 +1391,8 @@
     function fact(k, v) { if (v) { facts.appendChild(el("dt", null, k)); facts.appendChild(el("dd", null, v)); } }
     fact("Description", p.desc || "(none)");
     fact("VLAN", vlanName(p.vlan) ? p.vlan + " · " + vlanName(p.vlan) : vlanLong(p.vlan).replace("VLAN ", ""));
+    if (p.vlan === "trunk" && p.pvid) fact("PVID", vlanName(p.pvid) ? p.pvid + " · " + vlanName(p.pvid) : p.pvid);
+    if (p.tagged && p.tagged.length) fact("Tagged", taggedText(p));
     fact("Result", LABEL[p.activity] + " - " + p.why);
     fact("Status", STATUS[p.status] || p.status);
     fact("Last active", p.last_active);
