@@ -4,91 +4,78 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Network map - Port Analyzer</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='12' y='3' width='8' height='6' rx='1' fill='%23d95926'/%3E%3Crect x='4' y='13' width='8' height='6' rx='1' fill='%233987e5'/%3E%3Crect x='20' y='13' width='8' height='6' rx='1' fill='%233987e5'/%3E%3Crect x='2' y='24' width='7' height='5' rx='1' fill='%23199e70'/%3E%3Crect x='12' y='24' width='7' height='5' rx='1' fill='%23199e70'/%3E%3Crect x='23' y='24' width='7' height='5' rx='1' fill='%23199e70'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Crect x='6' y='12' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='13' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='20' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='6' y='19' width='5' height='4' fill='%234A5662'/%3E%3Crect x='13' y='19' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='20' y='19' width='5' height='4' fill='%23D9822B'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/app.css">
   <style>
     .pages { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
     .pages > li { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
     .pages > li.fresh a { font-weight: 700; }
-    .defs { display: grid; grid-template-columns: max-content 1fr; gap: 4px 18px; margin: 10px 0 0; font-size: 0.9rem; }
-    .defs dt { font-weight: 600; }
-    .defs dd { margin: 0; color: var(--ink-2); }
-    .conn-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 0.8fr) minmax(0, 1.2fr); gap: 12px; }
-    .steps { margin: 10px 0 0; padding-left: 20px; color: var(--ink-2); font-size: 0.92rem; display: grid; gap: 8px; }
-    .steps pre { margin: 6px 0 0; padding: 8px 10px; background: var(--sunken, #F5F7F9); border-radius: 6px;
-                 font-size: 0.82rem; overflow-x: auto; color: var(--ink); }
-    #notes { margin-top: 12px; }
+    .layers { display: grid; grid-template-columns: max-content 1fr; gap: 4px 18px; margin: 10px 0 0; font-size: 0.9rem; }
+    .layers dt { font-weight: 600; }
+    .layers dd { margin: 0; color: var(--ink-2); }
   </style>
 </head>
 <body>
   <header class="topbar">
     <a class="link" href="/">&larr; Port Analyzer</a>
     <h1>Network map</h1>
-    <p>Every switch Observium monitors, drawn in Cisco's three-layer model (core, distribution, access), with dropdowns to show just the part you need.</p>
+    <p>Which of your switches connect to which. Each switch on your list is asked who it's plugged into (CDP and LLDP), and only switches on your list are drawn.</p>
   </header>
 
   <main>
     <div class="setup">
-      <section class="panel" aria-labelledby="dbTitle">
-        <div class="panel-head">
-          <h2 id="dbTitle">Observium's database</h2>
-          <p>The map reads what Observium already knows (its devices and their CDP/LLDP links) straight from its MySQL database. It only reads; nothing in Observium changes.</p>
-        </div>
-        <div class="conn-grid">
-          <label class="field"><span>Observium server</span><input id="host" placeholder="Name or IP address" autocomplete="off" spellcheck="false"></label>
-          <label class="field"><span>Port</span><input id="port" inputmode="numeric" placeholder="3306" autocomplete="off"></label>
-          <label class="field"><span>Database</span><input id="database" placeholder="observium" autocomplete="off" spellcheck="false"></label>
-        </div>
-        <div class="login-grid" style="margin-top:12px">
-          <label class="field"><span>Database username</span><input id="user" autocomplete="off" spellcheck="false"></label>
-          <label class="field"><span>Database password</span><input id="password" type="password" autocomplete="off"></label>
-          <label class="field"><span>Observium website</span><input id="web" placeholder="Optional: https://observium..." autocomplete="off" spellcheck="false"></label>
-        </div>
-        <p class="hint">The password is used for this one read and never saved. The other fields are remembered. With the website filled in, each switch on the map links to its Observium page.</p>
-        <div class="actions">
-          <button class="btn primary big" id="drawBtn">Draw the map</button>
-          <button class="btn" id="testBtn">Test connection</button>
-          <a class="link" href="/network/demo" target="_blank" rel="noopener">See a made-up campus</a>
-        </div>
-        <div class="notice" id="notes" hidden></div>
+      <section class="panel" aria-labelledby="whatTitle">
+        <div class="panel-head"><h2 id="whatTitle">Which switches</h2></div>
+        <label class="field"><span>Switches</span><select id="scope"></select></label>
+        <p class="hint" id="scopeHint"></p>
+        <p class="hint">Uses the switch list from the Port Analyzer page. For the whole picture, map every switch; on the
+          map you can then show one building, one switch and what it's plugged into, or collapse the closets.</p>
+        <p class="hint"><a class="link" href="/network/demo">See a made-up campus</a></p>
       </section>
 
-      <section class="panel" aria-labelledby="pagesTitle">
+      <section class="panel" aria-labelledby="runTitle">
         <div class="panel-head">
-          <h2 id="pagesTitle">Maps</h2>
-          <p>Saved in your data folder (<span class="mono">data\network\pages</span>). Each opens in a new tab.</p>
+          <h2 id="runTitle">Log in and draw the map</h2>
+          <p>Passwords are only kept in memory for this run, never saved.</p>
         </div>
-        <ul class="pages" id="pages"></ul>
-        <p class="empty" id="pagesEmpty">None yet.</p>
+        <div class="login-grid">
+          <label class="field"><span>Username</span><input id="user" autocomplete="username"></label>
+          <label class="field"><span>Password</span><input id="pass" type="password" autocomplete="current-password"></label>
+          <label class="field"><span>Enable password</span><input id="secret" type="password" autocomplete="off" placeholder="Optional"></label>
+        </div>
+        <label class="check"><input type="checkbox" id="sshDifferent"> <span>SSH switches use a different login</span></label>
+        <div class="login-grid" id="sshLogin" hidden>
+          <label class="field"><span>SSH username</span><input id="sshUser" autocomplete="off"></label>
+          <label class="field"><span>SSH password</span><input id="sshPass" type="password" autocomplete="off"></label>
+          <label class="field"><span>SSH enable password</span><input id="sshSecret" type="password" autocomplete="off" placeholder="Optional"></label>
+        </div>
+        <div class="actions">
+          <button class="btn primary big" id="runBtn">Draw the map</button>
+          <button class="btn" id="stopBtn" hidden>Stop</button>
+        </div>
+        <div class="notice" id="notes" hidden></div>
+        <div class="progress" id="progressBox" hidden>
+          <div class="progress-line"><span>Reading switches</span><span id="progressCount" class="mono"></span></div>
+          <div class="bar"><div class="fill" id="progressFill"></div></div>
+        </div>
+        <ol class="log mono" id="log" aria-live="polite"></ol>
       </section>
     </div>
 
-    <section class="panel" aria-labelledby="helpTitle">
-      <div class="panel-head"><h2 id="helpTitle">Help</h2></div>
+    <section class="panel" aria-labelledby="pagesTitle">
+      <div class="panel-head">
+        <h2 id="pagesTitle">Maps</h2>
+        <p>Saved in your data folder (<span class="mono">data\network\pages</span>). Open one to look around: hover a switch to see its links, click it for the ports and to change its layer.</p>
+      </div>
+      <ul class="pages" id="pages"></ul>
+      <p class="empty" id="pagesEmpty">None yet.</p>
       <details class="more">
-        <summary>Setting up database access (one time, on the Observium server)</summary>
-        <p>Observium's database usually only accepts connections from the Observium server itself. Someone with root on that server does this once. Use this PC's IP address where it says <span class="mono">10.1.2.3</span>; if this PC's address changes, use its subnet instead, like <span class="mono">'10.1.2.%'</span>.</p>
-        <ol class="steps">
-          <li>Make a user that can only <strong>read</strong> the three tables the map needs, only from this PC:
-<pre>sudo mysql
-CREATE USER 'portanalyzer'@'10.1.2.3' IDENTIFIED BY 'a long password';
-GRANT SELECT ON observium.devices    TO 'portanalyzer'@'10.1.2.3';
-GRANT SELECT ON observium.ports      TO 'portanalyzer'@'10.1.2.3';
-GRANT SELECT ON observium.neighbours TO 'portanalyzer'@'10.1.2.3';</pre></li>
-          <li>Let MySQL accept connections from the network: in its config (often <span class="mono">/etc/mysql/mariadb.conf.d/50-server.cnf</span> or <span class="mono">/etc/mysql/mysql.conf.d/mysqld.cnf</span>), change <span class="mono">bind-address = 127.0.0.1</span> to the server's own IP, then <span class="mono">sudo systemctl restart mysql</span> (or <span class="mono">mariadb</span>).</li>
-          <li>Only let this PC reach port 3306. With ufw: <span class="mono">sudo ufw allow from 10.1.2.3 to any port 3306 proto tcp</span>.</li>
-          <li>Back here: fill in the server, the user and password, and click <strong>Test connection</strong>.</li>
-        </ol>
-      </details>
-      <details class="more" style="margin-top:12px">
         <summary>How each switch's layer is decided</summary>
-        <dl class="defs">
-          <dt>Core</dt><dd>Models that are usually core (Nexus 7000/9500, Catalyst 6500/6800/9600), firewalls and routers. With none of those, the switch linked to the most others.</dd>
-          <dt>Distribution</dt><dd>Models that are usually distribution (Catalyst 4500, 9400, 9500, Nexus 5000/3000), or a switch one step below the core with other switches below it.</dd>
-          <dt>Access</dt><dd>Models that are usually access (Catalyst 2960, 3560-3850, 9200, 9300, Dell PowerConnect, Aruba S3500), and everything at the edge.</dd>
-          <dt>Your choice</dt><dd>Click a switch on a map and pick its layer. It's saved, and every map uses it from then on.</dd>
-          <dt>Links</dt><dd>The CDP and LLDP neighbours Observium found. Neighbours it doesn't monitor are drawn dashed if they're routers or switches; phones, access points and servers are left out.</dd>
-          <dt>Buildings</dt><dd>From the switch list on the Port Analyzer page, matched by address. Anything not on it shows Observium's location.</dd>
+        <dl class="layers">
+          <dt>Core / distribution</dt><dd>The Nexus switches (and any Catalyst 6500/6800/9600). They do both jobs, so there's no separate distribution row. With no Nexus on the list, the switch linked to the most others.</dd>
+          <dt>Access</dt><dd>Everything else: the closets, grouped by building under the core switches they're plugged into.</dd>
+          <dt>Your choice</dt><dd>Click a switch on a map and pick its layer, for example Distribution for a switch that feeds other closets. It's saved and every map uses it from then on.</dd>
+          <dt>Links</dt><dd>CDP and LLDP neighbors that are on your switch list. Anything else a switch sees (routers, servers, phones, access points, a switch that isn't on your list) is left out; switches left out are named at the top of the map, in case one should be on your list. A switch on your list that nothing reports, often a Dell next to a Cisco that doesn't run LLDP, is found by its MAC address in the other switches' MAC tables and drawn with a dashed line.</dd>
         </dl>
       </details>
     </section>
@@ -98,13 +85,17 @@ GRANT SELECT ON observium.neighbours TO 'portanalyzer'@'10.1.2.3';</pre></li>
   (function () {
     "use strict";
     var $ = function (s) { return document.querySelector(s); };
-    var FIELDS = ["host", "port", "database", "user", "web"];
+    var state = { switches: [], logNext: 0, timer: null, fresh: "" };
+    function remember(k, v) { try { localStorage.setItem("pa." + k, v); } catch (e) { /* private window */ } }
+    function recall(k) { try { return localStorage.getItem("pa." + k); } catch (e) { return null; } }
     function el(tag, props, text) {
       var e = document.createElement(tag);
       Object.keys(props || {}).forEach(function (k) { e.setAttribute(k, props[k]); });
       if (text !== undefined) e.textContent = text;
       return e;
     }
+    function natural(a, b) { return String(a || "").localeCompare(String(b || ""), undefined, { numeric: true }); }
+    function plural(n, one, many) { return n + " " + (n === 1 ? one : many); }
     function notice(kind, messages) {
       var box = $("#notes");
       box.textContent = "";
@@ -123,59 +114,138 @@ GRANT SELECT ON observium.neighbours TO 'portanalyzer'@'10.1.2.3';</pre></li>
         return { ok: false, data: { problems: ["Can't reach the app. Is the RunAnalyzer window still open?"] } };
       }
     }
-    function body() {
-      var b = { password: $("#password").value };
-      FIELDS.forEach(function (f) { b[f] = $("#" + f).value.trim(); });
-      return b;
+
+    // ---- which switches (same choices as the Port Analyzer page) ----
+    function inScope() {
+      var scope = $("#scope").value;
+      if (scope.indexOf("b:") === 0) return state.switches.filter(function (s) { return s.building === scope.slice(2); });
+      if (scope.indexOf("s:") === 0) return state.switches.filter(function (s) { return s.address === scope.slice(2); });
+      return state.switches;
     }
-    function busy(on, label) {
-      $("#drawBtn").disabled = on; $("#testBtn").disabled = on;
-      $("#drawBtn").textContent = on && label === "draw" ? "Reading Observium…" : "Draw the map";
-      $("#testBtn").textContent = on && label === "test" ? "Testing…" : "Test connection";
+    function renderScope() {
+      var sel = $("#scope"), saved = state.switches;
+      sel.textContent = "";
+      sel.appendChild(el("option", { value: "" }, "Every switch (" + saved.length + ")"));
+      var counts = {};
+      saved.forEach(function (s) { if (s.building) counts[s.building] = (counts[s.building] || 0) + 1; });
+      var buildings = Object.keys(counts).sort(natural);
+      if (buildings.length) {
+        var g = el("optgroup", { label: "One building" });
+        buildings.forEach(function (b) { g.appendChild(el("option", { value: "b:" + b }, b + " (" + counts[b] + ")")); });
+        sel.appendChild(g);
+      }
+      if (saved.length) {
+        var g2 = el("optgroup", { label: "One switch" });
+        saved.slice().sort(function (a, b) {
+          return natural(a.building, b.building) || natural(a.location, b.location) || natural(a.address, b.address);
+        }).forEach(function (s) {
+          g2.appendChild(el("option", { value: "s:" + s.address },
+            (s.building ? s.building + ": " : "") + (s.location ? s.location + " (" + s.address + ")" : s.address)));
+        });
+        sel.appendChild(g2);
+      }
+      var last = recall("networkScope") || "";
+      sel.value = Array.prototype.some.call(sel.options, function (o) { return o.value === last; }) ? last : "";
+      hint();
     }
-    async function loadPages(fresh) {
+    function hint() {
+      var chosen = inScope(), kinds = {};
+      chosen.forEach(function (s) { kinds[s.type] = (kinds[s.type] || 0) + 1; });
+      var NAMES = { cisco_ios: "Cisco Catalyst", dell_powerconnect: "Dell", cisco_nxos: "Cisco Nexus", aruba_mas: "Aruba" };
+      var parts = Object.keys(kinds).map(function (k) { return kinds[k] + " " + (NAMES[k] || k); });
+      $("#scopeHint").textContent = state.switches.length
+        ? plural(chosen.length, "switch", "switches") + (parts.length ? ": " + parts.join(", ") : "") + "."
+        : "No switches yet. Add them on the Port Analyzer page under Switch list.";
+    }
+
+    // ---- earlier maps ----
+    async function loadRuns() {
       var pages = (await api("/api/network/pages")).data.pages || [];
       var list = $("#pages");
       list.textContent = "";
       $("#pagesEmpty").hidden = pages.length > 0;
       pages.forEach(function (p) {
-        var li = el("li", { "class": p.file === fresh ? "fresh" : "" });
+        var li = el("li", { "class": p.file === state.fresh ? "fresh" : "" });
         li.appendChild(el("a", { "class": "link", href: "/network/page/" + encodeURIComponent(p.file), target: "_blank",
                                   rel: "noopener" }, "Map drawn " + p.created));
         list.appendChild(li);
       });
     }
-    $("#testBtn").addEventListener("click", async function () {
-      busy(true, "test");
-      var r = await api("/api/network/test", body());
-      busy(false);
-      if (!r.ok) { notice("error", r.data.problems || ["Couldn't connect."]); return; }
-      notice("ok", ["Connected. Observium has " + r.data.devices + " devices and " + r.data.links + " neighbour records."]);
-    });
-    async function draw() {
-      busy(true, "draw");
-      notice("", []);
-      var tab = window.open("about:blank", "_blank");        // opened now, so the browser doesn't block it
-      var r = await api("/api/network/draw", body());
-      busy(false);
-      if (!r.ok) { if (tab) tab.close(); notice("error", r.data.problems || ["Couldn't draw the map."]); return; }
-      $("#password").value = "";
-      var s = r.data.summary;
-      notice("ok", ["Drawn: " + s.listed + " devices, " + s.links + " links (" + s.layers.core + " core, " +
-                    s.layers.distribution + " distribution, " + s.layers.access + " access)."]);
-      var url = "/network/page/" + encodeURIComponent(r.data.file);
-      if (tab) tab.location = url; else window.open(url, "_blank");
-      loadPages(r.data.file);
+
+    // ---- running ----
+    function setRunning(running) {
+      $("#runBtn").disabled = running;
+      $("#runBtn").textContent = running ? "Reading switches…" : "Draw the map";
+      $("#stopBtn").hidden = !running;
+      $("#stopBtn").disabled = false;
+      $("#progressBox").hidden = !running;
     }
-    $("#drawBtn").addEventListener("click", draw);
-    $("#password").addEventListener("keydown", function (e) { if (e.key === "Enter") draw(); });
-    (async function init() {
-      var saved = (await api("/api/network/connection")).data.connection || {};
-      FIELDS.forEach(function (f) { $("#" + f).value = saved[f] || ""; });
-      if (!$("#port").value) $("#port").value = "3306";
-      if (!$("#database").value) $("#database").value = "observium";
-      loadPages();
-    })();
+    async function poll() {
+      clearTimeout(state.timer);
+      var data = (await api("/api/network/job?since=" + state.logNext)).data;
+      if (!data || !data.state) { state.timer = setTimeout(poll, 2000); return; }
+      var log = $("#log");
+      var atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
+      data.lines.forEach(function (line) {
+        var li = el("li", { "class": line.level });
+        li.appendChild(el("time", {}, line.t));
+        li.appendChild(el("span", {}, line.msg));
+        log.appendChild(li);
+      });
+      if (atBottom) log.scrollTop = log.scrollHeight;
+      state.logNext = data.next;
+      var p = data.progress;
+      $("#progressCount").textContent = p.total ? p.done + " of " + p.total : "";
+      $("#progressFill").style.width = p.total ? Math.round(100 * p.done / p.total) + "%" : "0";
+      if (data.state === "running") { setRunning(true); state.timer = setTimeout(poll, 1000); return; }
+      setRunning(false);
+      if (data.state === "done" && data.report_file) {
+        state.fresh = data.report_file;
+        await loadRuns();
+        window.open("/network/page/" + encodeURIComponent(data.report_file), "_blank", "noopener");
+      }
+    }
+    async function start() {
+      remember("user", $("#user").value);
+      remember("sshUser", $("#sshUser").value);
+      remember("networkScope", $("#scope").value);
+      var body = {
+        scope: $("#scope").value,
+        username: $("#user").value, password: $("#pass").value, secret: $("#secret").value,
+        ssh_different: $("#sshDifferent").checked,
+        ssh_username: $("#sshUser").value, ssh_password: $("#sshPass").value, ssh_secret: $("#sshSecret").value
+      };
+      var r = await api("/api/network/run", body);
+      if (!r.ok) { notice("error", r.data.problems || ["Couldn't start."]); return; }
+      notice("", []);
+      $("#log").textContent = "";
+      state.logNext = 0;
+      setRunning(true);
+      poll();
+    }
+
+    async function init() {
+      var data = (await api("/api/state")).data;
+      state.switches = data.switches || [];
+      $("#user").value = recall("user") || "";
+      $("#sshUser").value = recall("sshUser") || "";
+      $("#sshDifferent").checked = recall("sshDifferent") === "1";
+      $("#sshLogin").hidden = !$("#sshDifferent").checked;
+      renderScope();
+      await loadRuns();
+      var job = (await api("/api/network/job?since=0")).data;
+      if (job && job.state === "running") { state.logNext = 0; poll(); }     // a run started before a reload
+    }
+
+    $("#scope").addEventListener("change", hint);
+    $("#sshDifferent").addEventListener("change", function () {
+      $("#sshLogin").hidden = !$("#sshDifferent").checked;
+      remember("sshDifferent", $("#sshDifferent").checked ? "1" : "0");
+    });
+    $("#runBtn").addEventListener("click", start);
+    $("#stopBtn").addEventListener("click", function () { $("#stopBtn").disabled = true; api("/api/network/stop", {}); });
+    $("#pass").addEventListener("keydown", function (e) { if (e.key === "Enter") start(); });
+    init();
   })();
   </script>
 </body>

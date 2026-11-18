@@ -1,22 +1,19 @@
 """
-network.py - Network map: every switch Observium monitors, placed in Cisco's three-layer
-model (core, distribution, access) and joined by the links Observium knows about.
+network.py - Network map: which switches on the list connect to which, drawn in Cisco's
+three-layer model (core, distribution, access) with the Nexus core on top.
 
-Where the data comes from: Observium's MySQL database, read-only. Observium Community
-Edition has no API, so the app reads three tables directly:
-    devices      what Observium monitors: name, model, OS, type, location, up or down
-    ports        port names (only the ports that have a neighbour)
-    neighbours   the CDP/LLDP links Observium discovered over SNMP
-Nothing is ever written to Observium's database. The password is asked for each time
-and never saved.
-
-Then:
-  * each link is usually recorded from both ends (and by CDP and LLDP); it's kept once
-  * neighbours Observium doesn't monitor are kept only if they look like network gear
-    (routers, switches); phones, access points and servers are left out
-  * each switch's layer comes from its model (a Catalyst 4500 is distribution, a 2960 is
-    access...) or from where it sits; anyone can change it on the map, and that's saved
-  * switches on the Port Analyzer switch list get their building and location from it
+How it works:
+  * Log into each switch once and read who it's plugged into: CDP and LLDP neighbors
+    (Cisco speaks both, Dell and Aruba speak LLDP), plus its model, the MAC address table
+    and, on Cisco, the ARP table.
+  * Join the neighbors up into links. Each link is usually seen from both ends; it's kept once.
+    Only switches on the list are drawn: a neighbor that isn't on it (a router, a server,
+    a phone) is left out, so the map shows just which of your switches connect to which.
+  * A switch on the list that no neighbor reported (a Dell next to a Cisco without LLDP
+    turned on, say) is looked for by its MAC address in the other switches' MAC tables.
+  * Decide each switch's layer: the Nexus switches are the core (doing distribution too),
+    everything plugged into them is access. You can change any switch's layer on the page,
+    for example to make a switch distribution; that's saved.
 
 The drawing itself is laid out by the page (templates/network.html).
 """
@@ -26,108 +23,57 @@ from __future__ import annotations
 import json
 import re
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+import analyzer
+import portdocs
+import switches as sw
 import topology
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 LAYERS = ("core", "distribution", "access")
 
-# Observium device types drawn on the map; servers, printers, UPSes and the like aren't
-NETWORK_TYPES = {"network", "firewall", "wireless", "loadbalancer", "security", "", "unknown"}
+COMMANDS = {
+    "cisco_ios": {
+        "version": ("show version",), "cdp": ("show cdp neighbors detail",),
+        "lldp": ("show lldp neighbors detail",), "arp": ("show ip arp",),
+        "macs": ("show mac address-table dynamic", "show mac-address-table dynamic"),
+    },
+    "cisco_nxos": {
+        "version": ("show version",), "cdp": ("show cdp neighbors detail",),
+        "lldp": ("show lldp neighbors detail",), "arp": ("show ip arp vrf all", "show ip arp"),
+        "macs": ("show mac address-table dynamic",),
+    },
+    "dell_powerconnect": {
+        "version": ("show system", "show version"), "lldp": ("show lldp neighbors",),
+        "macs": ("show mac address-table dynamic", "show bridge address-table"),
+    },
+    "aruba_mas": {
+        "version": ("show version",), "lldp": ("show lldp neighbor",), "macs": ("show mac-address-table",),
+    },
+}
+BIG = {"arp", "macs"}                     # these can be long on a core switch
+
+
+def collect(switch, login, timeout=20):
+    """Log into one switch and run its commands. A command it doesn't know gives ''."""
+    vendor = switch["type"]
+    outputs = {}
+    with sw.connect(switch["address"], vendor, switch["protocol"], login, timeout) as conn:
+        outputs["prompt"] = sw.prompt_name(conn)
+        for key, commands in COMMANDS[vendor].items():
+            _, outputs[key] = sw.run_first_working(conn, list(commands), read_timeout=300 if key in BIG else 120)
+    return outputs
 
 
 # ---------------------------------------------------------------------------
-# Reading Observium's database
+# Reading neighbors
 # ---------------------------------------------------------------------------
-class ObserviumError(Exception):
-    """Something to tell the person in plain words."""
-
-
-def connect_observium(host, port, database, user, password, timeout=10):
-    """A read connection to Observium's MySQL database."""
-    import pymysql                     # only needed for the Network map
-    try:
-        return pymysql.connect(host=host, port=int(port or 3306), user=user, password=password,
-                               database=database or "observium", connect_timeout=timeout, read_timeout=120,
-                               charset="utf8mb4", cursorclass=pymysql.cursors.DictCursor)
-    except pymysql.err.MySQLError as exc:
-        raise ObserviumError(friendly_db_error(exc, host, database, user, port)) from exc
-
-
-def friendly_db_error(exc, host="", database="", user="", port=3306):
-    args = getattr(exc, "args", ()) or ()
-    code = args[0] if args and isinstance(args[0], int) else None
-    text = str(args[1]) if len(args) > 1 else str(exc)
-    if code == 1045:
-        return f"The database refused the username or password for '{user}'."
-    if code in (1044, 1049):
-        return f"The database '{database}' doesn't exist on {host}, or '{user}' isn't allowed to use it."
-    if code == 1142:
-        return ("The database user can't read one of the tables it needs (devices, ports, neighbours). "
-                "It needs SELECT on all three.")
-    if code == 1130:
-        return (f"{host} doesn't allow '{user}' to connect from this PC. The user has to be created for "
-                "this PC's address (see 'Setting up database access').")
-    if code in (2003, 2005, 2013):
-        return (f"Couldn't reach the database on {host} port {port or 3306}. MySQL may only be listening on the "
-                "server itself, or a firewall is blocking that port (see 'Setting up database access').")
-    return text[:300] or exc.__class__.__name__
-
-
-def _rows(conn, sql, params=()):
-    with conn.cursor() as cur:
-        cur.execute(sql, params)
-        return list(cur.fetchall())
-
-
-def _db_errors(func):
-    """Turn the database library's errors into plain words."""
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except ObserviumError:
-            raise
-        except Exception as exc:
-            if exc.__class__.__module__.startswith("pymysql"):
-                raise ObserviumError(friendly_db_error(exc)) from exc
-            raise
-    return wrapper
-
-
-@_db_errors
-def read_observium(conn):
-    """{"devices": [...], "ports": {port_id: row}, "neighbours": [...]} from Observium's tables."""
-    devices = _rows(conn, "SELECT * FROM devices")
-    neighbours = _rows(conn, "SELECT * FROM neighbours")
-    wanted = sorted({int(n["port_id"]) for n in neighbours if n.get("port_id")} |
-                    {int(n["remote_port_id"]) for n in neighbours if n.get("remote_port_id")})
-    ports = {}
-    for i in range(0, len(wanted), 500):
-        chunk = wanted[i:i + 500]
-        marks = ",".join(["%s"] * len(chunk))
-        for row in _rows(conn, f"SELECT port_id, device_id, ifName, ifDescr, ifAlias FROM ports "
-                               f"WHERE port_id IN ({marks})", chunk):
-            ports[int(row["port_id"])] = row
-    return {"devices": devices, "ports": ports, "neighbours": neighbours}
-
-
-@_db_errors
-def count_observium(conn):
-    """For 'Test connection': how much is there (and that every table can be read)."""
-    devices = _rows(conn, "SELECT COUNT(*) AS n FROM devices")[0]["n"]
-    links = _rows(conn, "SELECT COUNT(*) AS n FROM neighbours")[0]["n"]
-    _rows(conn, "SELECT port_id, device_id, ifName FROM ports LIMIT 1")
-    return {"devices": int(devices), "links": int(links)}
-
-
-# ---------------------------------------------------------------------------
-# Names, gear and layers
-# ---------------------------------------------------------------------------
-_IP = r"\d{1,3}(?:\.\d{1,3}){3}"
+_IP = r"(\d{1,3}(?:\.\d{1,3}){3})"
 
 
 def short_name(device_id):
@@ -138,36 +84,149 @@ def short_name(device_id):
     return name.split(".")[0]
 
 
-_NOT_GEAR = re.compile(r"(?i)phone|\bAIR-|access point|\bAP\d|C9\d{2}AX|camera|VMware|ESXi?\b|Linux|Windows|"
-                       r"printer|polycom|yealink|axis|ubuntu|debian|red hat|server")
-_GEAR = re.compile(r"(?i)cisco|catalyst|nexus|ws-c|\bc\d{4}|\bn\dk|\bios\b|dell|powerconnect|force10|aruba|procurve|"
-                   r"\bhp\b|hpe|juniper|junos|fortigate|fortinet|palo alto|pan-os|\basa\b|\bisr\d|\basr\d|"
-                   r"switch|router|firewall|arista|extreme|brocade|ruckus icx|mikrotik")
+def parse_cdp(output):
+    """'show cdp neighbors detail' (IOS or NX-OS) -> neighbors."""
+    found = []
+    for block in re.split(r"(?m)^\s*-{5,}\s*$", output or ""):
+        dev = re.search(r"(?m)^\s*Device ID\s*:\s*(.+?)\s*$", block)
+        intf = re.search(r"(?m)Interface\s*:\s*([^,\n]+?)\s*,\s*Port ID \(outgoing port\)\s*:\s*(.+?)\s*$", block)
+        if not dev or not intf:
+            continue
+        sysname = re.search(r"(?m)^\s*System Name\s*:\s*(\S+)", block)
+        ip = re.search(r"(?i)(?:IP(?:v4)? address|IPv4 Address)\s*:\s*" + _IP, block)
+        platform = re.search(r"(?m)Platform\s*:\s*([^,\n]+)", block)
+        caps = re.search(r"(?m)Capabilities\s*:\s*(.+?)\s*$", block)
+        found.append({
+            "local": intf.group(1).strip(), "port": intf.group(2).strip(),
+            "name": short_name(sysname.group(1) if sysname else dev.group(1)),
+            "ip": ip.group(1) if ip else "", "chassis": "",
+            "platform": platform.group(1).strip() if platform else "",
+            "caps": caps.group(1).strip() if caps else "", "source": "CDP",
+        })
+    return found
 
 
-def looks_like_gear(hostname, platform, version=""):
-    """A neighbour Observium doesn't monitor: keep it only if it's a router, switch or firewall."""
-    text = f"{platform or ''} {version or ''}"
-    if re.fullmatch(r"(?i)SEP[0-9A-F]{12}|[0-9a-f]{2}([ :.-]?[0-9a-f]{2}){5}\s*", hostname or "") or _NOT_GEAR.search(text):
+def parse_lldp_detail(output):
+    """'show lldp neighbors detail' (IOS or NX-OS) -> neighbors."""
+    text = output or ""
+    if re.search(r"(?m)^\s*Local Intf\s*:", text):           # IOS: blocks between dashed lines
+        blocks = re.split(r"(?m)^\s*-{5,}\s*$", text)
+    else:                                                    # NX-OS: a block starts at each "Chassis id"
+        blocks = re.split(r"(?m)^(?=\s*Chassis id\s*:)", text)
+    found = []
+    for block in blocks:
+        local = re.search(r"(?m)^\s*(?:Local Intf|Local Port id)\s*:\s*(\S+)", block)
+        if not local:
+            continue
+        def field(name):
+            m = re.search(r"(?m)^\s*" + name + r"\s*:\s*(.*?)\s*$", block)
+            return m.group(1) if m else ""
+        port, desc = field("Port id"), field("Port Description")
+        if not re.search(r"\d", port) or re.fullmatch(r"[0-9a-fA-F.:-]{12,17}", port):
+            port = desc or port                       # some devices send their MAC as the port id
+        ip = re.search(r"(?m)^\s*(?:IP|Management Address(?:es)?)\s*:\s*" + _IP, block)
+        sysdesc = re.search(r"(?ms)^\s*System Description\s*:\s*\n?(.*?)(?:\n\s*\n|\n\s*Time remaining)", block)
+        found.append({
+            "local": local.group(1), "port": port, "name": short_name(field("System Name")),
+            "ip": ip.group(1) if ip else "", "chassis": field("Chassis id"),
+            "platform": (sysdesc.group(1).strip().splitlines() or [""])[0][:80] if sysdesc else "",
+            "caps": field("Enabled Capabilities") or field("System Capabilities"), "source": "LLDP",
+        })
+    return found
+
+
+_CAP_LETTERS = r"[BRWTCDHSOPA]"
+
+
+def parse_lldp_table(output, vendor):
+    """Dell 'show lldp neighbors' or Aruba 'show lldp neighbor' (tables) -> neighbors."""
+    found = []
+    for line in (output or "").splitlines():
+        if vendor == "aruba_mas":
+            m = re.match(r"^\s*((?:GE|ge|Pc|pc)\S*\d)\s+(\S+)\s+(" + _CAP_LETTERS + r"(?::" + _CAP_LETTERS + r")*)"
+                         r"\s+(\S+)\s+(\d+)\s+(\S+)", line)
+            if m:
+                found.append({"local": m.group(1), "chassis": m.group(2), "caps": m.group(3).replace(":", ","),
+                              "port": m.group(4), "name": short_name(m.group(6)), "ip": "", "platform": "",
+                              "source": "LLDP"})
+        else:
+            m = re.match(r"^\s*((?:gi|te|fa|xg|ch|Gi|Te|Fa)\S*\d)\s+(\S+)\s+(\S+)\s+(?:(.+?)\s+)?"
+                         r"(" + _CAP_LETTERS + r"(?:\s*,\s*" + _CAP_LETTERS + r")*)\s+(\d+)\s*$", line)
+            if m:
+                found.append({"local": m.group(1), "chassis": m.group(2), "port": m.group(3),
+                              "name": short_name(m.group(4) or ""), "caps": m.group(5), "ip": "",
+                              "platform": "", "source": "LLDP"})
+    return found
+
+
+def is_network_gear(nb):
+    """Switches, routers and firewalls only: no phones, access points, cameras or servers."""
+    caps, platform = nb["caps"], nb["platform"]
+    if re.search(r"(?i)phone|\bAIR-|access point|\bAP\d|C9\d{2}AX|camera|VMware|ESX|Linux|Windows", platform):
         return False
-    return bool(_GEAR.search(text))
+    if nb["source"] == "CDP":
+        return bool(re.search(r"(?i)\b(router|switch)\b", caps)) and not re.search(r"(?i)\bphone\b", caps)
+    letters = set(re.findall(r"\b([A-Z])\b", caps.upper().replace("BRIDGE", "B").replace("ROUTER", "R")
+                             .replace("WLAN", "W").replace("TELEPHONE", "T")))
+    return bool(letters & {"B", "R"}) and not letters & {"W", "T", "A", "P"}
 
 
-_HINTS = [
-    ("core", r"nexus\s*7|n7k|c7\d{3}\b|nexus\s*95|n9k-c95|c9600|c96\d\d|ws-c65|c650\d|c68\d\d"),
-    ("distribution", r"ws-c45|c45\d\d|c4507|c4510|c9400|c94\d\d|c9500|c95\d\d|c3850-(?:12|24|48)xs|nexus\s*[35]|n[35]k"),
-    ("access", r"ws-c29|c29\d\d|ws-c3[5-8]|c3[5-8]\d\d|c9200|c92\d\d|c9300|c93\d\d|\bie-|c1000|catalyst 1000|"
-               r"powerconnect|\b55\d\dp?\b|s3500|s2500|aruba\s*s\d|nexus\s*2|n2k|cbs\d|\bsg\d"),
-]
+def neighbors_from(outputs, vendor):
+    """Every network-gear neighbor a switch reported, by CDP and LLDP."""
+    if vendor in ("dell_powerconnect", "aruba_mas"):
+        found = parse_lldp_table(outputs.get("lldp"), vendor)
+    else:
+        found = parse_cdp(outputs.get("cdp")) + parse_lldp_detail(outputs.get("lldp"))
+    return [nb for nb in found if is_network_gear(nb)]
+
+
+# ---------------------------------------------------------------------------
+# Who a switch is: name, model, its own MAC addresses
+# ---------------------------------------------------------------------------
+def switch_identity(outputs, vendor):
+    text = outputs.get("version") or ""
+    model = ""
+    if vendor == "cisco_ios":
+        m = (re.search(r"(?im)^\s*Model [Nn]umber\s*:\s*(\S+)", text)
+             or re.search(r"(?im)^\s*cisco\s+(\S+)\s+\(.*?\)\s+processor", text))
+        model = m.group(1) if m else ""
+    elif vendor == "cisco_nxos":
+        m = re.search(r"(?im)^\s*cisco\s+(Nexus.*?)\s+(?:\(.*?\)\s+)?Chassis", text)
+        model = m.group(1) if m else ""
+    elif vendor == "dell_powerconnect":
+        model = topology.parse_dell_system(text)["model"]
+    else:
+        m = re.search(r"(?i)MODEL:\s*([^)\s,]+)", text)
+        model = m.group(1) if m else ""
+    macs = {portdocs.mac_dotted(m) for m in re.findall(
+        r"(?i)(?:Base ethernet MAC Address|System MAC Address|MAC Address)\s*:\s*([0-9a-f]{2}(?:[:-][0-9a-f]{2}){5}|"
+        r"[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4})", text)}
+    return {"hostname": outputs.get("prompt", ""), "model": model, "macs": macs}
+
+
+def parse_arp(output):
+    """'show ip arp' (IOS or NX-OS) -> {ip: mac}."""
+    table = {}
+    for line in (output or "").splitlines():
+        ip = re.search(r"(?<![\d.])" + _IP + r"(?![\d.])", line)
+        mac = portdocs._MAC.search(line)
+        if ip and mac:
+            table[ip.group(1)] = portdocs.mac_dotted(mac.group(1))
+    return table
+
+
+# ---------------------------------------------------------------------------
+# Layers
+# ---------------------------------------------------------------------------
+_CORE = re.compile(r"(?i)nexus|\bn[3579]k|n[3579]k-|c7\d{3}\b|c9600|c96\d\d|ws-c65|c650\d|c68\d\d")
 
 
 def layer_hint(model, kind=""):
-    """('core'|'distribution'|'access'|None, why) from a model name, or from being a router/firewall."""
-    for layer, pattern in _HINTS:
-        if model and re.search(pattern, model, re.I):
-            return layer, f"Its model ({model}) is usually {'an' if layer == 'access' else 'a'} {layer} switch"
-    if kind in ("firewall", "router"):
-        return "core", f"A {kind}: drawn with the core, where the network leaves campus"
+    """('core', why) for a Nexus (or another core chassis), else (None, '')."""
+    if kind == "cisco_nxos":
+        return "core", "A Nexus: the core, doing distribution too"
+    if model and _CORE.search(model):
+        return "core", f"Its model ({model}) is a core switch"
     return None, ""
 
 
@@ -208,15 +267,18 @@ def assign_layers(nodes, adjacency):
         if info["hint"]:
             info["layer_auto"], info["layer_why"] = info["hint"], info["hint_why"]
         elif n in core:
-            info["layer_auto"], info["layer_why"] = "core", "Linked to more switches than any other"
-        elif hops.get(n) == 1 and any(hops.get(m) == 2 for m in adjacency[n]):
-            info["layer_auto"], info["layer_why"] = "distribution", "Between the core and other switches"
+            info["layer_auto"], info["layer_why"] = "core", "No Nexus found, and it's linked to the most switches"
         elif n not in hops:
             info["layer_auto"], info["layer_why"] = "access", "Not linked to the core by anything found"
+        elif hops[n] == 1:
+            info["layer_auto"], info["layer_why"] = "access", "Plugged straight into the core"
         else:
-            info["layer_auto"], info["layer_why"] = "access", "At the edge: no switches below it"
+            info["layer_auto"], info["layer_why"] = "access", f"Plugged into the core through {hops[n] - 1} other switch(es)"
 
 
+# ---------------------------------------------------------------------------
+# Building the map
+# ---------------------------------------------------------------------------
 def _port(name):
     """Short port names, the same whichever end reported them: Gi1/0/49, Te1/1, Eth1/1, GE0/0/47."""
     name = (name or "").strip()
@@ -229,169 +291,160 @@ def _port(name):
     return topology.normalize_intf(name)
 
 
-def _false(value):
-    return str(value).strip().lower() in ("0", "false")
-
-
-# ---------------------------------------------------------------------------
-# Building the map
-# ---------------------------------------------------------------------------
-def build_map(obs, switch_list=(), overrides=None, source="", now=None, web=""):
-    """Observium's rows (from read_observium) -> page data."""
+def build_map(results, overrides=None, scope="", now=None):
+    """results: [{"switch": row from the list, "outputs": {...} or None, "problem": ""}] -> page data."""
     overrides = overrides or {}
     now = now or datetime.now()
-    listed = {}
-    for s in switch_list:
-        listed.setdefault(s["address"].lower(), s)
-        listed.setdefault(short_name(s["address"]).lower(), s)
-
-    nodes, by_device, by_name = {}, {}, {}
-    left_out = 0
-    for d in obs["devices"]:
-        if d.get("disabled") and not _false(d.get("disabled")):
-            continue
-        kind = str(d.get("type") or "").lower()
-        if kind not in NETWORK_TYPES:
-            left_out += 1
-            continue
-        hostname = str(d.get("hostname") or "").strip()
-        name = short_name(str(d.get("sysName") or "") or hostname) or hostname
-        on_list = (listed.get(hostname.lower()) or listed.get(str(d.get("ip") or "").lower())
-                   or listed.get(name.lower()))
-        model = str(d.get("hardware") or "").strip()
-        hint, why = layer_hint(model, kind)
-        node_id = hostname.lower()
-        down = _false(d.get("status", 1))
+    nodes, by_ip, by_name, by_mac = {}, {}, {}, {}
+    for res in results:
+        s = res["switch"]
+        outputs = res.get("outputs") or {}
+        ident = switch_identity(outputs, s["type"]) if outputs else {"hostname": "", "model": "", "macs": set()}
+        node_id = s["address"]
+        hint, why = layer_hint(ident["model"], s["type"])
         nodes[node_id] = {
-            "id": node_id, "name": name, "address": hostname, "listed": True, "observium_id": d.get("device_id"),
-            "model": model, "os": str(d.get("os") or ""), "kind": kind,
-            "building": on_list.get("building", "") if on_list else "",
-            "location": (on_list.get("location", "") if on_list else "") or str(d.get("location") or "").strip(),
-            "obs_location": str(d.get("location") or "").strip(),
-            "on_list": bool(on_list), "list_address": on_list["address"] if on_list else "",
-            "list_type": on_list.get("type", "") if on_list else "",
-            "read": not down, "problem": "Observium shows it as down" if down else "",
-            "hint": hint, "hint_why": why,
+            "id": node_id, "name": ident["hostname"] or s["address"], "address": s["address"], "listed": True,
+            "type": s["type"], "os": sw.TYPES.get(s["type"], s["type"]), "model": ident["model"],
+            "building": s.get("building", ""), "location": s.get("location", ""), "obs_location": "",
+            "on_list": True, "list_type": s["type"], "list_address": s["address"], "observium_id": None,
+            "kind": "network", "read": bool(outputs), "problem": res.get("problem", ""), "hint": hint,
+            "hint_why": why, "_macs": ident["macs"],
         }
-        by_device[d.get("device_id")] = node_id
-        by_name.setdefault(name.lower(), node_id)
-        by_name.setdefault(hostname.lower(), node_id)
-        if d.get("ip"):
-            by_name.setdefault(str(d["ip"]).lower(), node_id)
+        by_ip[s["address"]] = node_id
+        if ident["hostname"]:
+            by_name[ident["hostname"].lower()] = node_id
+        for mac in ident["macs"]:
+            by_mac[mac] = node_id
 
-    def unmonitored(n):
-        """A neighbour Observium doesn't monitor -> its node, or None if it isn't network gear."""
-        label = short_name(str(n.get("remote_hostname") or "")) or str(n.get("remote_address") or "")
-        for key in (label.lower(), str(n.get("remote_address") or "").lower()):
-            if key and key in by_name:
-                return by_name[key]
-        if not label or not looks_like_gear(label, n.get("remote_platform"), n.get("remote_version")):
-            return None
-        node_id = "n:" + label.lower()
-        if node_id not in nodes:
-            platform = re.sub(r"(?i)^cisco\s+", "", str(n.get("remote_platform") or "")).strip()
-            kind = ("router" if re.search(r"(?i)\b(isr|asr)\d|\brouter\b", platform) else
-                    "firewall" if re.search(r"(?i)\basa\b|firewall|fortigate|palo alto", platform) else "")
-            hint, why = layer_hint(platform, kind)
-            nodes[node_id] = {
-                "id": node_id, "name": label, "address": str(n.get("remote_address") or ""), "listed": False,
-                "observium_id": None, "model": platform, "os": "", "kind": kind, "building": "", "location": "",
-                "obs_location": "", "on_list": False, "list_address": "", "list_type": "", "read": True,
-                "problem": "", "hint": hint, "hint_why": why,
-            }
-            by_name[label.lower()] = node_id
-        return node_id
+    left_out = {}                                           # neighbors not on the list: name -> platform
 
-    ports = obs["ports"]
-    links, dropped = {}, 0
-    for n in obs["neighbours"]:
-        if "active" in n and _false(n.get("active")):
+    def resolve(nb):
+        """The switch on the list a neighbor is, or None (it's left out)."""
+        for key, table in ((nb["ip"], by_ip), (nb["name"].lower(), by_name),
+                           (portdocs.mac_dotted(nb["chassis"]) if re.search(r"[0-9a-fA-F]{4}", nb["chassis"] or "")
+                            and len(re.sub(r"[^0-9a-fA-F]", "", nb["chassis"])) == 12 else "", by_mac)):
+            if key and key in table:
+                node = nodes[table[key]]
+                if not node["read"] and nb["name"] and node["name"] == node["address"]:
+                    node["name"] = nb["name"]               # couldn't log in, but a neighbor told us its name
+                if not node["model"] and nb["platform"]:
+                    node["model"] = re.sub(r"(?i)^cisco\s+", "", nb["platform"])
+                    if not node["hint"]:
+                        node["hint"], node["hint_why"] = layer_hint(node["model"], node["type"])
+                return table[key]
+        label = nb["name"] or nb["ip"] or nb["chassis"]
+        if label and re.search(r"(?i)\bswitch\b|\bB\b", nb["caps"]):
+            left_out.setdefault(label, re.sub(r"(?i)^cisco\s+", "", nb["platform"]))
+        return None
+
+    # Links, each kept once however many times (and from which ends) it was reported
+    links = {}
+    link_ports = {}                                         # node -> ports that lead to another node
+    counts = {}
+    for res in results:
+        outputs = res.get("outputs")
+        if not outputs:
             continue
-        here = by_device.get(n.get("device_id"))
-        if not here:
-            continue
-        local = ports.get(int(n["port_id"])) if n.get("port_id") else None
-        local_port = _port(local["ifName"] or local["ifDescr"]) if local else ""
-        far = ports.get(int(n["remote_port_id"])) if n.get("remote_port_id") else None
-        if far and far["device_id"] in by_device:
-            there = by_device[far["device_id"]]
-            far_port = _port(far["ifName"] or far["ifDescr"])
-        elif far:                                  # a device left out (a server, say)
-            dropped += 1
-            continue
-        else:
-            there = unmonitored(n)
-            far_port = _port(str(n.get("remote_port") or ""))
-            if not there:
-                dropped += 1
+        here = res["switch"]["address"]
+        found = neighbors_from(outputs, res["switch"]["type"])
+        counts[here] = len(found)
+        for nb in found:
+            link_ports.setdefault(here, set()).add(analyzer.match_key(nb["local"]))   # leads somewhere else
+            there = resolve(nb)
+            if there is None or there == here:
                 continue
-        if there == here:
+            a, b = sorted([(here, _port(nb["local"])), (there, _port(nb["port"]))])
+            pair = (a[0], b[0])
+            entry = links.setdefault(pair, {"a": a[0], "b": b[0], "pairs": {}})
+            key = (a[1], b[1])
+            entry["pairs"].setdefault(key, set()).add(nb["source"])
+            link_ports.setdefault(there, set()).add(analyzer.match_key(nb["port"]))
+
+    # Switches on the list that nothing reported: look for them in the MAC tables
+    arp = {}
+    tables = {}
+    for res in results:
+        outputs = res.get("outputs")
+        if outputs:
+            arp.update(parse_arp(outputs.get("arp")))
+            tables[res["switch"]["address"]] = portdocs.mac_sightings(outputs.get("macs"))
+    linked = {n for pair in links for n in pair}
+    mac_found = 0
+    for node_id, node in nodes.items():
+        if not node["listed"] or node_id in linked:
             continue
-        (a, pa), (b, pb) = sorted([(here, local_port), (there, far_port)])
-        pair = links.setdefault((a, b), {})
-        pair.setdefault((pa, pb), set()).add(str(n.get("protocol") or "").upper() or "Observium")
+        wanted = set(node["_macs"])
+        if node["address"] in arp:
+            wanted.add(arp[node["address"]])
+        best = None
+        for other, sightings in tables.items():
+            if other == node_id:
+                continue
+            per_port = {}
+            for mac, _, port in sightings:
+                per_port.setdefault(port, set()).add(mac)
+            for port, macs in per_port.items():
+                if not macs & wanted or analyzer.match_key(port) in link_ports.get(other, set()):
+                    continue
+                if best is None or len(macs) < best[0]:     # fewest MACs behind it: the closest port
+                    best = (len(macs), other, port)
+        if best:
+            _, other, port = best
+            a, b = sorted([(other, _port(port)), (node_id, "")])
+            links[(a[0], b[0])] = {"a": a[0], "b": b[0], "pairs": {(a[1], b[1]): {"MAC table"}}}
+            mac_found += 1
 
-    out_links = []
-    for (a, b), pairs in sorted(links.items()):
-        # The same link seen from an end that couldn't name the far port: fold it into the full one
-        for (pa, pb) in [k for k in pairs if "" in k]:
-            full = [k for k in pairs if "" not in k and pa in ("", k[0]) and pb in ("", k[1])]
-            if full:
-                pairs[full[0]].update(pairs.pop((pa, pb)))
-        out_links.append({"a": a, "b": b, "mac": False,
-                          "pairs": [{"a_port": pa, "b_port": pb, "found_by": " and ".join(sorted(src))}
-                                    for (pa, pb), src in sorted(pairs.items())]})
-
-    adjacency = {node_id: set() for node_id in nodes}
-    for link in out_links:
-        adjacency[link["a"]].add(link["b"])
-        adjacency[link["b"]].add(link["a"])
-    # A lone non-switch device with no links (a wireless controller, say) isn't worth drawing
-    for node_id in [k for k, v in nodes.items() if not adjacency[k] and v["kind"] not in ("network", "", "unknown")]:
-        del nodes[node_id], adjacency[node_id]
+    adjacency = {n: set() for n in nodes}
+    for a, b in links:
+        adjacency[a].add(b)
+        adjacency[b].add(a)
     assign_layers(nodes, adjacency)
     for node_id, node in nodes.items():
         node["layer"] = overrides.get(node_id) if overrides.get(node_id) in LAYERS else node["layer_auto"]
         node["links"] = len(adjacency[node_id])
-        node.pop("hint", None)
-        node.pop("hint_why", None)
+        for key in ("hint", "hint_why", "_macs"):
+            node.pop(key, None)
 
     warnings = []
-    down = sorted((n for n in nodes.values() if not n["read"]), key=lambda n: n["name"])
-    if down:
-        warnings.append(f"Observium shows {len(down)} of these as down: "
-                        + ", ".join(n["name"] for n in down[:8]) + (" ..." if len(down) > 8 else "") + ".")
-    alone = sorted((n for n in nodes.values() if n["listed"] and not adjacency[n["id"]]), key=lambda n: n["name"])
+    unread = [n for n in nodes.values() if n["listed"] and not n["read"]]
+    if unread:
+        warnings.append(f"{len(unread)} switch(es) on your list couldn't be read: "
+                        + "; ".join(f"{n['name']} ({n['problem'] or 'no answer'})" for n in unread[:6])
+                        + (" ..." if len(unread) > 6 else "") + ". They're drawn where their neighbors say they are.")
+    if mac_found:
+        warnings.append(f"{mac_found} switch(es) weren't reported by CDP or LLDP, so they were found by their MAC "
+                        "address in another switch's MAC table (dashed line). The port on their own end isn't "
+                        "known. Dell and Aruba switches only speak LLDP; a Cisco switch needs 'lldp run' to see them.")
+    alone = [n for n in nodes.values() if n["listed"] and not adjacency[n["id"]] and n["read"]]
     if alone:
-        warnings.append(f"{len(alone)} device(s) have no links in Observium: "
-                        + ", ".join(n["name"] for n in alone[:8]) + (" ..." if len(alone) > 8 else "")
-                        + ". Observium learns links from CDP/LLDP; a Cisco only sees a Dell or Aruba if it runs LLDP.")
-    monitored = [n for n in nodes.values() if n["listed"]]
+        warnings.append(f"{len(alone)} switch(es) aren't linked to any other switch on your list: "
+                        + ", ".join(n["name"] for n in alone[:8]) + (" ..." if len(alone) > 8 else "") + ".")
+    if left_out:
+        names = sorted(left_out, key=str.lower)
+        warnings.append(f"Not drawn: {len(names)} neighbor(s) that call themselves switches but aren't on your list "
+                        f"({', '.join(names[:8])}{' ...' if len(names) > 8 else ''}). If one of them is yours, "
+                        "add it to the switch list and draw the map again.")
+
+    out_links = []
+    for (a, b), entry in sorted(links.items()):
+        pairs = [{"a_port": pa, "b_port": pb, "found_by": " and ".join(sorted(src))}
+                 for (pa, pb), src in sorted(entry["pairs"].items())]
+        out_links.append({"a": a, "b": b, "pairs": pairs,
+                          "mac": all(p["found_by"] == "MAC table" for p in pairs)})
+    listed = list(nodes.values())
     return {
-        "title": "Network map", "source": source, "drawn": now.strftime("%Y-%m-%d %H:%M"), "web": web,
-        "nodes": sorted(nodes.values(), key=lambda n: (not n["listed"], n["building"], n["location"],
-                                                       n["name"].lower())),
+        "title": "Network map", "source": scope, "drawn": now.strftime("%Y-%m-%d %H:%M"), "web": "",
+        "nodes": sorted(listed, key=lambda n: (n["building"], n["location"], n["name"].lower())),
         "links": out_links, "warnings": warnings,
-        "summary": {"listed": len(monitored), "read": len([n for n in monitored if n["read"]]),
-                    "other": len(nodes) - len(monitored), "links": len(out_links), "left_out": left_out,
-                    "dropped": dropped,
+        "summary": {"listed": len(listed), "read": len([n for n in listed if n["read"]]),
+                    "links": len(out_links), "left_out": len(left_out),
                     "layers": {layer: len([n for n in nodes.values() if n["layer"] == layer]) for layer in LAYERS}},
+        "neighbors": counts,
     }
 
 
-def draw_from_observium(conn_args, switch_list, data_dir, web="", connect=None):
-    """Read Observium, draw the map and save it. Returns (data, saved page path)."""
-    conn = (connect or connect_observium)(**conn_args)
-    try:
-        obs = read_observium(conn)
-    finally:
-        conn.close()
-    data = build_map(obs, switch_list, load_overrides(data_dir), f"Observium on {conn_args['host']}", web=web)
-    return data, save_page(data_dir, render_html(data))
-
-
 # ---------------------------------------------------------------------------
-# Pages, saved settings and the layer choices people make
+# Pages and the layer choices people make
 # ---------------------------------------------------------------------------
 def load_overrides(data_dir):
     path = Path(data_dir) / "layers.json"
@@ -414,27 +467,9 @@ def save_override(data_dir, node_id, layer):
     return data
 
 
-CONNECTION_FIELDS = ("host", "port", "database", "user", "web")       # never the password
-CONNECTION_DEFAULTS = {"host": "", "port": "3306", "database": "observium", "user": "", "web": ""}
-
-
-def load_connection(data_dir):
-    try:
-        saved = json.loads((Path(data_dir) / "observium.json").read_text(encoding="utf-8"))
-        return {k: str(saved.get(k) or CONNECTION_DEFAULTS[k]) for k in CONNECTION_FIELDS}
-    except (OSError, ValueError):
-        return dict(CONNECTION_DEFAULTS)
-
-
-def save_connection(data_dir, fields):
-    Path(data_dir).mkdir(parents=True, exist_ok=True)
-    clean = {k: str(fields.get(k, "")).strip() for k in CONNECTION_FIELDS}
-    (Path(data_dir) / "observium.json").write_text(json.dumps(clean, indent=2), encoding="utf-8")
-
-
 def render_html(data):
     env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)), autoescape=select_autoescape(["html"]))
-    data_json = json.dumps(data, default=str).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    data_json = json.dumps(data).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     return env.get_template("network.html").render(data=data, data_json=data_json)
 
 
@@ -457,10 +492,75 @@ def list_pages(data_dir, limit=15):
     return out
 
 
+def save_debug(debug_dir, address, outputs):
+    debug_dir = Path(debug_dir)
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^\w.-]", "_", address)
+    path = debug_dir / f"{safe}-network.txt"
+    with open(path, "w", encoding="utf-8") as f:
+        for key, text in outputs.items():
+            f.write(f"===== {key} =====\n{text}\n\n")
+    return path
+
+
+def run_job(job, switch_list, logins, settings, data_dir, debug_dir, scope_label):
+    """Read every switch, a few at a time, then draw and save the map."""
+    job.state = "running"
+    try:
+        job.progress = {"done": 0, "total": len(switch_list)}
+        job.log(f"Mapping {scope_label}...")
+        results = []
+        with ThreadPoolExecutor(max_workers=int(settings.get("parallel", 10))) as pool:
+            futures = {pool.submit(_read_one, job, s, logins[s["protocol"]], int(settings.get("timeout", 20))): s
+                       for s in switch_list}
+            for fut in as_completed(futures):
+                res = fut.result()
+                job.progress["done"] += 1
+                if res is None:
+                    continue
+                results.append(res)
+                s = res["switch"]
+                if res["outputs"] is None:
+                    job.log(f"Couldn't read {s['address']}: {res['problem']}", "error")
+                    continue
+                name = res["outputs"].get("prompt") or s["address"]
+                where = s["address"] if name == s["address"] else f"{name} ({s['address']})"
+                found = neighbors_from(res["outputs"], s["type"])
+                job.log(f"{where}: {len(found)} switch/router neighbor(s)"
+                        + ("" if found else ", none by CDP or LLDP"), "info" if found else "warn")
+                if not found and debug_dir:
+                    save_debug(debug_dir, s["address"], res["outputs"])
+        if job.stop_requested.is_set():
+            job.state = "stopped"
+            job.log("Stopped. Nothing was drawn.", "warn")
+            return
+        results.sort(key=lambda r: analyzer.port_key(r["switch"]["address"]))
+        data = build_map(results, load_overrides(data_dir), scope_label)
+        path = save_page(data_dir, render_html(data))
+        job.report_file = path
+        s = data["summary"]
+        job.log(f"Done. {s['read']} of {s['listed']} switches read, {s['links']} links, "
+                f"{s['layers']['core']} core, {s['layers']['distribution']} distribution, "
+                f"{s['layers']['access']} access.", "done")
+        job.state = "done"
+    except Exception as exc:
+        job.state = "failed"
+        job.log(f"The map stopped with an error: {sw.friendly_error(exc)}", "error")
+
+
+def _read_one(job, switch, login, timeout):
+    if job.stop_requested.is_set():
+        return None
+    try:
+        return {"switch": switch, "outputs": collect(switch, login, timeout), "problem": ""}
+    except Exception as exc:
+        return {"switch": switch, "outputs": None, "problem": sw.friendly_error(exc)}
+
+
 def run_demo(data_dir=None, save=False, overrides=None):
-    """A made-up campus, so you can see the page without Observium."""
-    from network_demo import demo_observium, demo_switch_list
-    data = build_map(demo_observium(), demo_switch_list(), overrides or {}, "made-up sample campus")
+    """A made-up campus, so you can see the page without any switches."""
+    from network_demo import demo_results
+    data = build_map(demo_results(), overrides or {}, "made-up sample campus")
     data["demo"] = True
     html = render_html(data)
     return data, html, save_page(data_dir, html) if save and data_dir else None

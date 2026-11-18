@@ -36,7 +36,8 @@
   [hidden] { display: none !important; }
   :focus-visible { outline: 2px solid var(--action); outline-offset: 2px; }
 
-  .totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+  .totals { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+  .totals .total { flex: 1 1 180px; min-width: 0; }
   .total { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 6px; padding: 12px 16px; }
   .total-label { color: var(--ink-2); font-size: 0.88rem; display: flex; align-items: center; gap: 7px; }
   .total-value { font-size: 1.75rem; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
@@ -73,6 +74,7 @@
   .group.dim { opacity: 0.25; }
   .fold { font: 600 10.5px var(--sans); fill: var(--action); cursor: pointer; }
   .fold:hover { text-decoration: underline; }
+  .bldg { font: 600 10.5px var(--sans); fill: var(--ink-2); }
   .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.85rem; color: var(--ink-2); margin: 0 0 10px; }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
   .legend svg { flex: none; }
@@ -151,19 +153,19 @@
 <main>
   <a class="back" href="/network">&larr; Network map</a>
   <h1>Network map</h1>
-  <p class="sub">{{ data.source }} · drawn {{ data.drawn }} · {{ data.summary.listed }} devices{% if data.summary.read < data.summary.listed %}, {{ data.summary.listed - data.summary.read }} down{% endif %}{% if data.demo %} · <strong>made-up sample</strong>{% endif %}</p>
+  <p class="sub">{{ data.source }} · drawn {{ data.drawn }} · {{ data.summary.read }} of {{ data.summary.listed }} switches read{% if data.demo %} · <strong>made-up sample</strong>{% endif %}</p>
 
   <div class="totals">
-    <div class="total"><div class="total-label"><span class="sw core"></span>Core</div><div class="total-value" id="t-core">{{ data.summary.layers.core }}</div><div class="total-note">fast backbone between buildings</div></div>
-    <div class="total"><div class="total-label"><span class="sw distribution"></span>Distribution</div><div class="total-value" id="t-distribution">{{ data.summary.layers.distribution }}</div><div class="total-note">joins a building's closets to the core</div></div>
+    <div class="total"><div class="total-label"><span class="sw core"></span><span id="n-core">Core</span></div><div class="total-value" id="t-core">{{ data.summary.layers.core }}</div><div class="total-note">fast backbone between buildings</div></div>
+    <div class="total" id="tile-distribution"><div class="total-label"><span class="sw distribution"></span>Distribution</div><div class="total-value" id="t-distribution">{{ data.summary.layers.distribution }}</div><div class="total-note" id="note-distribution">joins a building's closets to the core</div></div>
     <div class="total"><div class="total-label"><span class="sw access"></span>Access</div><div class="total-value" id="t-access">{{ data.summary.layers.access }}</div><div class="total-note">where people and devices plug in</div></div>
-    <div class="total"><div class="total-label">Links</div><div class="total-value">{{ data.summary.links }}</div><div class="total-note">{{ data.summary.other }} neighbour(s) Observium doesn't monitor</div></div>
+    <div class="total"><div class="total-label">Links</div><div class="total-value">{{ data.summary.links }}</div><div class="total-note">between switches on your list</div></div>
   </div>
   {% for w in data.warnings %}<p class="notice">{{ w }}</p>{% endfor %}
 
   <div class="controls">
     <label>Building <select id="building"><option value="">All buildings</option></select></label>
-    <label>Distribution switch <select id="dist"><option value="">All</option></select></label>
+    <label id="dist-label">Distribution switch <select id="dist"><option value="">All</option></select></label>
     <input type="search" id="q" list="names" placeholder="Find a switch, then press Enter" aria-label="Find a switch">
     <datalist id="names"></datalist>
     <div class="zoom">
@@ -175,25 +177,24 @@
   </div>
   <div class="controls second">
     <span class="label">Show</span>
-    <label><input type="checkbox" class="show-layer" value="core" checked> Core</label>
+    <label><input type="checkbox" class="show-layer" value="core" checked> <span class="core-name">Core</span></label>
     <label><input type="checkbox" class="show-layer" value="distribution" checked> Distribution</label>
     <label><input type="checkbox" class="show-layer" value="access" checked> Access</label>
     <span class="sep"></span>
     <label><input type="checkbox" id="collapse"> Collapse closets</label>
-    <label><input type="checkbox" id="others" checked> Neighbours Observium doesn't monitor</label>
   </div>
   <div class="focus-bar" id="focus-bar" hidden>
     <span id="focus-text"></span>
     <button type="button" class="btn" id="focus-clear">Show everything</button>
   </div>
   <div class="legend">
-    <span><span class="sw core"></span>Core</span>
-    <span><span class="sw distribution"></span>Distribution</span>
+    <span><span class="sw core"></span><span class="core-name">Core</span></span>
+    <span id="leg-distribution"><span class="sw distribution"></span>Distribution</span>
     <span><span class="sw access"></span>Access</span>
     <span><svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" class="edge"/></svg>link (CDP or LLDP)</span>
     <span><svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" class="edge thick"/></svg>2 or more links</span>
-    <span><svg width="34" height="16"><rect x="1" y="1" width="32" height="14" rx="3" fill="none" stroke="currentColor" stroke-dasharray="4 3"/></svg>not monitored by Observium</span>
-    <span><svg width="14" height="14"><circle cx="7" cy="7" r="6" class="bad" fill="#B42318"/></svg>down in Observium</span>
+    <span><svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" class="edge mac"/></svg>found by MAC address</span>
+    <span><svg width="14" height="14"><circle cx="7" cy="7" r="6" class="bad" fill="#B42318"/></svg>couldn't log in</span>
     <span><svg width="38" height="18"><rect x="5" y="1" width="32" height="12" rx="3" fill="none" stroke="currentColor" opacity=".5"/><rect x="1" y="5" width="32" height="12" rx="3" fill="var(--surface)" stroke="currentColor"/></svg>closets, collapsed (click to open)</span>
   </div>
 
@@ -238,6 +239,8 @@
                 collapse: D.nodes.filter(function (n) { return n.layer === "access"; }).length > 30, open: {} };
   var current = null;                    // the last layout
 
+  function hasDist() { return D.nodes.some(function (n) { return layerOf(n) === "distribution"; }); }
+  function layerName(l) { return l === "core" && !hasDist() ? "Core / distribution" : NAMES[l]; }
   function layerOf(n) {
     if (overrides) return Object.prototype.hasOwnProperty.call(overrides, n.id) ? overrides[n.id] : n.layer_auto;
     return n.layer;
@@ -344,8 +347,11 @@
         });
       }
       var key = Object.keys(attach).sort().join("|");
-      var c = clusters[key] || (clusters[key] = { key: key, attach: Object.keys(attach), members: [] });
-      members.forEach(function (m) { clusterOf[m] = c; c.members.push(m); });
+      members.forEach(function (m) {                // one group per building under the same switches
+        var k = key + "#" + (byId[m].building || "");
+        var c = clusters[k] || (clusters[k] = { key: k, attach: Object.keys(attach), members: [] });
+        clusterOf[m] = c; c.members.push(m);
+      });
     });
     // Order inside a cluster: switches on an uplink first, each followed by the ones chained behind it
     Object.keys(clusters).forEach(function (k) {
@@ -404,7 +410,9 @@
       .concat(looseFam.clusters.length ? [looseFam] : []);
 
     // Rows
-    var yCore = TOP, yDist = yCore + H + 96, yBus = yDist + H + 44, yAccess = yBus + 26;
+    var noDist = dist.length === 0;
+    var yCore = TOP, yDist = noDist ? yCore : yCore + H + 96;
+    var yBus = noDist ? yCore + H + 70 : yDist + H + 44, yAccess = yBus + 26;
     var x = LEFT, maxRows = 0;
     famList.forEach(function (f) {
       var rowW = f.dist.length ? f.dist.length * W + (f.dist.length - 1) * GAP : 0;
@@ -440,17 +448,18 @@
       });
       var want = xs.length ? xs.reduce(function (s, v) { return s + v; }, 0) / xs.length - W / 2 : LEFT + i * (W + GAP);
       return { id: n.id, want: want, i: i };
-    }).sort(function (a, b) { return a.want - b.want || a.i - b.i; });
+    }).sort(function (a, b) { return natural(byId[a.id].name, byId[b.id].name) || a.i - b.i; });  // always in name order
     // spread them evenly around the middle of where they want to be
     if (wanted.length) {
       var span = wanted.length * W + (wanted.length - 1) * GAP;
       var mid = wanted.reduce(function (s, w) { return s + w.want; }, 0) / wanted.length + W / 2;
-      var start = Math.max(LEFT, Math.min(mid - span / 2, width - span - 20));
+      var left = noDist ? 172 : LEFT;              // room for the "CORE / DISTRIBUTION" label
+      var start = Math.max(left, Math.min(mid - span / 2, width - span - 20));
       wanted.forEach(function (w, i) { pos[w.id] = { x: start + i * (W + GAP), y: yCore }; });
       width = Math.max(width, start + span + 40);
     }
     var height = yAccess + Math.max(1, maxRows) * (H + ROW_GAP) + 24;
-    return { pos: pos, adj: adj, clusters: clusters, clusterOf: clusterOf, width: width, height: height,
+    return { pos: pos, adj: adj, clusters: clusters, clusterOf: clusterOf, width: width, height: height, noDist: noDist,
              rows: { core: yCore, distribution: yDist, access: yAccess, bus: yBus }, view: view, families: famList };
   }
 
@@ -468,13 +477,21 @@
     var root = svg("svg", { viewBox: "0 0 " + L.width + " " + L.height, width: L.width * state.zoom,
                             height: L.height * state.zoom, role: "img", "aria-label": "Network map" });
     // Bands with the layer names, so layer isn't told by color alone
-    [["core", L.rows.core], ["distribution", L.rows.distribution], ["access", L.rows.bus - 8]].forEach(function (b, i) {
-      var top = i === 0 ? 0 : i === 1 ? L.rows.distribution - 30 : L.rows.bus - 14;
-      var bottom = i === 0 ? L.rows.distribution - 30 : i === 1 ? L.rows.bus - 14 : L.height;
-      if (i !== 1) svg("rect", { x: 0, y: top, width: L.width, height: bottom - top, "class": "band" }, root);
-      var t = svg("text", { x: 14, y: (i === 2 ? L.rows.access : b[1]) + H / 2 + 4, "class": "band-label" }, root);
-      t.textContent = NAMES[b[0]].toUpperCase();
-    });
+    if (L.noDist) {
+      svg("rect", { x: 0, y: L.rows.bus - 14, width: L.width, height: L.height - L.rows.bus + 14, "class": "band" }, root);
+      [["core", L.rows.core], ["access", L.rows.access]].forEach(function (b) {
+        var t = svg("text", { x: 14, y: b[1] + H / 2 + 4, "class": "band-label" }, root);
+        t.textContent = layerName(b[0]).toUpperCase();
+      });
+    } else {
+      [["core", L.rows.core], ["distribution", L.rows.distribution], ["access", L.rows.bus - 8]].forEach(function (b, i) {
+        var top = i === 0 ? 0 : i === 1 ? L.rows.distribution - 30 : L.rows.bus - 14;
+        var bottom = i === 0 ? L.rows.distribution - 30 : i === 1 ? L.rows.bus - 14 : L.height;
+        if (i !== 1) svg("rect", { x: 0, y: top, width: L.width, height: bottom - top, "class": "band" }, root);
+        var t = svg("text", { x: 14, y: (i === 2 ? L.rows.access : b[1]) + H / 2 + 4, "class": "band-label" }, root);
+        t.textContent = NAMES[b[0]].toUpperCase();
+      });
+    }
     var edges = svg("g", {}, root), nodesG = svg("g", {}, root);
     var P = L.pos;
     function mid(id) { return P[id].x + W / 2; }
@@ -541,6 +558,13 @@
           fold.addEventListener("click", function () { state.open[c.key] = false; draw(); });
         }
       }
+      // Which building these closets are in, just above them
+      var bname = byId[c.members[0]].building;
+      if (bname && !c.collapsed) {                  // (a collapsed box says its building itself)
+        var room = Math.floor((c.width - (!state.collapse || state.focus || c.members.length < 2 ? 0 : 70)) / 6.2);
+        var bt = svg("text", { x: c.x + 2, y: L.rows.access - 7, "class": "bldg" }, edges);
+        bt.textContent = bname.length > room ? bname.slice(0, Math.max(1, room - 1)) + "…" : bname;
+      }
       var spineXs = Object.keys(cols).map(function (col) { return c.x + Number(col) * (W + COL_GAP) - 12; });
       var busY = c.busY;
       if (c.attach.length) {
@@ -553,7 +577,9 @@
           var mine = c.members.filter(function (m) { return L.adj[m].indexOf(up) !== -1; });
           var ls = view.links.filter(function (l) { return (l.a === up || l.b === up) && mine.indexOf(l.a === up ? l.b : l.a) !== -1; });
           var cls = "edge" + (ls.length && ls.every(function (l) { return l.mac; }) ? " mac" : "");
-          if (c.viaCore) {
+          if (c.viaCore && L.noDist) {
+            line("M" + x + "," + top + " L" + (busL + busR) / 2 + "," + busY, cls, [up].concat(mine));
+          } else if (c.viaCore) {
             var over = L.rows.distribution - 22;
             line("M" + x + "," + top + " L" + x + "," + over + " L" + busL + "," + over + " L" + busL + "," + busY, cls, [up].concat(mine));
           } else {
@@ -642,9 +668,8 @@
       var name = svg("text", { x: 14, y: 19, "class": "name" }, g);
       name.textContent = clip(n.name, 21);
       var meta = svg("text", { x: 14, y: 36, "class": "meta" }, g);
-      meta.textContent = clip(n.listed ? [n.location || n.building, n.model].filter(Boolean).join(" · ")
-                                       : "Not in Observium" + (n.model ? " · " + n.model : ""), 29);
-      if (n.listed && !n.read) {
+      meta.textContent = clip([n.location || n.building, n.model].filter(Boolean).join(" · "), 29);
+      if (!n.read) {
         svg("circle", { cx: W - 12, cy: 12, r: 7, "class": "bad" }, g);
         var t = svg("text", { x: W - 12, y: 16, "class": "bad-text", "text-anchor": "middle" }, g);
         t.textContent = "!";
@@ -713,9 +738,8 @@
     tip.appendChild(el("strong", null, n.name));
     tip.appendChild(el("div", "muted", [n.address, n.model, [n.building, n.location].filter(Boolean).join(", ")].filter(Boolean).join(" · ")));
     var layer = layerOf(n);
-    tip.appendChild(el("div", null, NAMES[layer] + (layer !== n.layer_auto ? " (you set this)" : "")));
-    if (n.listed && !n.read) tip.appendChild(el("div", "problem", n.problem || "Down"));
-    if (!n.listed) tip.appendChild(el("div", "muted", "Not monitored by Observium"));
+    tip.appendChild(el("div", null, layerName(layer) + (layer !== n.layer_auto ? " (you set this)" : "")));
+    if (!n.read) tip.appendChild(el("div", "problem", "Couldn't log in: " + (n.problem || "no answer")));
     var ports = portList(n.id), ul = el("ul");
     ports.slice(0, 10).forEach(function (p) {
       ul.appendChild(el("li", null, (p.here || "?") + " → " + p.other.name + (p.there ? " " + p.there : "")));
@@ -767,24 +791,22 @@
     state.picked = id;
     mark(id);
     document.getElementById("d-title").textContent = n.name;
-    document.getElementById("d-sub").textContent = (n.listed ? NAMES[layerOf(n)] : "Not monitored by Observium") +
-      (n.kind && n.kind !== "network" ? " · " + n.kind : "");
+    document.getElementById("d-sub").textContent = layerName(layerOf(n));
     var prob = document.getElementById("d-problem");
-    prob.hidden = !(n.listed && !n.read);
-    prob.textContent = (n.problem || "Down") + ".";
+    prob.hidden = n.read;
+    prob.textContent = "Couldn't log in: " + (n.problem || "no answer") + ". Drawn where its neighbors say it is.";
     var dl = document.getElementById("d-facts");
     dl.textContent = "";
     fact(dl, "Address", n.address);
     fact(dl, "Model", n.model);
-    fact(dl, "OS", n.os);
+    fact(dl, "Type", n.os);
     fact(dl, "Building", n.building);
     fact(dl, "Location", n.location);
-    if (n.obs_location && n.obs_location !== n.location) fact(dl, "In Observium", n.obs_location);
     fact(dl, "Links", String(linksOf(id).length));
 
     var sel = document.getElementById("d-layer");
     sel.textContent = "";
-    var auto = el("option", null, "Automatic (" + NAMES[n.layer_auto] + ")");
+    var auto = el("option", null, "Automatic (" + layerName(n.layer_auto) + ")");
     auto.value = "";
     sel.appendChild(auto);
     LAYERS.forEach(function (l) { var o = el("option", null, NAMES[l]); o.value = l; sel.appendChild(o); });
@@ -793,7 +815,7 @@
     sel.value = set;
     sel.disabled = !SERVED || !overrides;
     document.getElementById("d-saved").textContent = !SERVED ? "Open this map from the app to change layers." : "";
-    document.getElementById("d-why").textContent = set ? "You set this. Automatic would be " + NAMES[n.layer_auto] +
+    document.getElementById("d-why").textContent = set ? "You set this. Automatic would be " + layerName(n.layer_auto) +
       ": " + n.layer_why.charAt(0).toLowerCase() + n.layer_why.slice(1) + "." : n.layer_why + ".";
 
     var actions = document.getElementById("d-actions");
@@ -807,13 +829,6 @@
       a.href = "/topology?address=" + encodeURIComponent(n.list_address);
       actions.appendChild(document.createTextNode(" "));
       actions.appendChild(a);
-    }
-    if (D.web && n.observium_id) {
-      var o = el("a", "btn", "Open in Observium");
-      o.href = D.web.replace(/\/+$/, "") + "/device/device=" + encodeURIComponent(n.observium_id) + "/";
-      o.target = "_blank"; o.rel = "noopener";
-      actions.appendChild(document.createTextNode(" "));
-      actions.appendChild(o);
     }
 
     var body = document.getElementById("d-links");
@@ -861,6 +876,14 @@
     LAYERS.forEach(function (l) {
       document.getElementById("t-" + l).textContent = D.nodes.filter(function (n) { return layerOf(n) === l; }).length;
     });
+    document.getElementById("n-core").textContent = layerName("core");
+    document.getElementById("note-distribution").textContent = hasDist() ? "joins a building's closets to the core"
+      : "none: the core does this";
+    document.getElementById("dist-label").hidden = !hasDist();
+    document.querySelector('.show-layer[value="distribution"]').parentNode.hidden = !hasDist();
+    document.getElementById("tile-distribution").hidden = !hasDist();
+    document.getElementById("leg-distribution").hidden = !hasDist();
+    Array.prototype.forEach.call(document.querySelectorAll(".core-name"), function (e) { e.textContent = layerName("core"); });
     distOptions();
   }
 
@@ -891,7 +914,7 @@
     state.focus = id;
     var n = byId[id];
     document.getElementById("focus-text").textContent = "Showing " + n.name + " and the " + neighbours(id).length +
-      " device(s) it's linked to.";
+      " switch(es) it's linked to.";
     document.getElementById("focus-bar").hidden = false;
     refresh();
     openPanel(id);
@@ -922,7 +945,7 @@
   var collapse = document.getElementById("collapse");
   collapse.checked = state.collapse;
   collapse.addEventListener("change", function () { state.collapse = collapse.checked; state.open = {}; refresh(); });
-  document.getElementById("others").addEventListener("change", function () { state.others = this.checked; refresh(); });
+
   function zoomTo(z) {
     state.zoom = Math.max(0.2, Math.min(2, z));
     var s = document.querySelector("#map svg");
@@ -938,7 +961,7 @@
   document.getElementById("z-fit").addEventListener("click", fit);
   document.getElementById("print").addEventListener("click", function () { window.print(); });
 
-  distOptions();
+  totals();
   draw();
   fit();
   if (state.zoom < 0.55) zoomTo(0.55);        // a big network: readable, scroll around (Fit shows it all)
