@@ -129,6 +129,20 @@ From the command line:
 .venv\Scripts\python topology.py --demo -t dell
 ```
 
+## Port documentation
+
+Click **Port documentation** at the top of the page to make CSVs of every port on every switch in your list (or one building, or one switch), for documentation. Enter the login like on the main page and click **Make CSVs**. Each switch is logged into once, several at a time, and the log shows how each one went. When it's done you get two downloads:
+- **One CSV, every switch**: every port of every switch in one file.
+- **One CSV per switch (.zip)**: a file per switch, named after it.
+
+Each row has: Switch (its name), Address, Building, Location, Member/slot, Port, Interface, Description, VLAN, VLAN name, Tagged VLANs (the voice VLAN, or what a trunk carries), Status, Speed, Duplex, Result (Active, Inactive or Unsure for the months you picked), Last active, Why, Issues, Power (what the port powers), and **MAC addresses**: every MAC the switch has learned on that port, as `0011.2233.4455`, with the VLAN noted when it's not the port's own (usually the phone on the voice VLAN). Trunk ports just say **Trunk port**.
+
+- **Cisco Catalyst and Dell** switches get everything the Stack topology page shows, for ports 1–48 of every stack member (uplink ports aren't included). It also updates the same history the Stack topology page keeps, so either one helps the other with Unsure ports.
+- **Cisco Nexus and Aruba** switches get every port, with the columns those switches can fill: description, VLAN and its name, status, result, last active and MACs.
+- A switch that couldn't be read is listed under the run as **Not included**, with the reason; the others are still saved.
+
+The CSVs are saved in `data\docs\<date-time>\`, and earlier runs stay listed on the page. They open straight in Excel. A description starting with `=`, `+`, `-` or `@` gets a `'` in front so Excel shows it as text instead of running it.
+
 ## How it knows when a port was last used
 
 Each type of switch keeps track differently:
@@ -144,7 +158,7 @@ Each type of switch keeps track differently:
 
 ## Your data
 
-Your switch list, settings, saved reports and any debug output live in the `data` folder next to the app. Git ignores that folder, so none of it ends up on GitHub, and updating the app never touches it.
+Your switch list, settings, saved reports, Stack topology drawings, Port documentation CSVs and any debug output live in the `data` folder next to the app. Git ignores that folder, so none of it ends up on GitHub, and updating the app never touches it.
 
 ## Updating
 
@@ -186,6 +200,7 @@ app.py              web app (Flask, served by waitress on 127.0.0.1 only)
 analyzer.py         reading each switch type's ports, deciding Inactive/Unsure/Active, the command line
 switches.py         logging in over SSH/telnet for each switch type
 report.py           the Excel report
+portdocs.py         Port documentation: every port of every switch, with MAC addresses, as CSVs
 topology.py         Stack topology: reading a Cisco or Dell stack, deciding each port, PoE and error checks, the cable test, Cisco/Dell config translation, the saved page
 topology_demo.py    made-up Cisco and Dell stacks for the example pages and the tests
 templates/, static/ the pages
@@ -197,6 +212,7 @@ tests/              pretend switches, sample output for each type, end-to-end te
 ```
 .venv\Scripts\python tests\test_end_to_end.py
 .venv\Scripts\python tests\test_topology.py
+.venv\Scripts\python tests\test_portdocs.py
 ```
 
 **Add a switch type:** in `switches.py`, add it to `TYPES`, `MODELS` and `DRIVERS`. In `analyzer.py`, write a reader that returns each port's status, VLAN, description and when it was last used (or that it was never used, and how far back the switch can see), and add it to `READERS`. Put sample output in `tests/samples.py` and the expected answers next to it.

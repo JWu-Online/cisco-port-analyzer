@@ -1501,17 +1501,21 @@ def _stack_links(neighbors, stack_ports):
 # ---------------------------------------------------------------------------
 # Talking to the switch, saving the page
 # ---------------------------------------------------------------------------
-def collect_outputs(address, protocol, login, timeout=20, progress=print, vendor="cisco_ios"):
-    """Log in once and run every command. A command the switch doesn't know gives ''."""
+def collect_outputs(address, protocol, login, timeout=20, progress=print, vendor="cisco_ios", extra=None):
+    """Log in once and run every command. A command the switch doesn't know gives ''.
+
+    `extra` adds more {key: command or (commands to try)} for other tools (Port documentation).
+    """
     outputs = {}
     with sw.connect(address, vendor, protocol, login, timeout) as conn:
         outputs["prompt"] = sw.prompt_name(conn)
-        for key, command in COMMANDS_FOR[vendor].items():
+        for key, command in {**COMMANDS_FOR[vendor], **(extra or {})}.items():
             tries = list(command) if isinstance(command, tuple) else [command]
             progress(f"  {tries[0]}")
             try:
                 _, outputs[key] = sw.run_first_working(conn, tries,
-                                                       read_timeout=300 if key in ("interfaces", "config", "counters") else 180)
+                                                       read_timeout=300 if key in ("interfaces", "config", "counters", "macs")
+                                                       else 180)
             except Exception as exc:                 # one bad command shouldn't stop the rest
                 progress(f"    skipped: {sw.friendly_error(exc)}")
                 outputs[key] = ""
