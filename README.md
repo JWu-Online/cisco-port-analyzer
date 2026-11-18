@@ -135,7 +135,7 @@ Click **Port documentation** at the top of the page to make CSVs of every port o
 - **One CSV, every switch**: every port of every switch in one file.
 - **One CSV per switch (.zip)**: a file per switch, named after it.
 
-Each row has: Switch (its name), Address, Building, Location, Member/slot, Port, Interface, Description, VLAN, VLAN name, Tagged VLANs (the voice VLAN, or what a trunk carries), Status, Speed, Duplex, Result (Active, Inactive or Unsure for the months you picked), Last active, Why, Issues, Power (what the port powers), and **MAC addresses**: every MAC the switch has learned on that port, as `0011.2233.4455`, with the VLAN noted when it's not the port's own (usually the phone on the voice VLAN). Trunk ports just say **Trunk port**.
+Each row has: Switch (its name), Address, Building, Location, Member/slot, Port, Interface, Description, VLAN, VLAN name, Tagged VLANs (the voice VLAN, or what a trunk carries), Status, Speed, Duplex, Result (Active, Inactive or Unsure for the months you picked), Last active, Why, Issues, Power (what the port powers), **MAC addresses** (every MAC the switch has learned on that port, as `0011.2233.4455`) and **MAC count** (how many). Trunk ports just say **Trunk port**, with no count.
 
 - **Cisco Catalyst and Dell** switches get everything the Stack topology page shows, for ports 1–48 of every stack member (uplink ports aren't included). It also updates the same history the Stack topology page keeps, so either one helps the other with Unsure ports.
 - **Cisco Nexus and Aruba** switches get every port, with the columns those switches can fill: description, VLAN and its name, status, result, last active and MACs.
