@@ -19,7 +19,7 @@
   <header class="topbar">
     <a class="link" href="/">&larr; Port Analyzer</a>
     <h1>Network map</h1>
-    <p>Which of your switches connect to which. Each switch on your list is asked who it's plugged into (CDP and LLDP), and only switches on your list are drawn.</p>
+    <p>Which of your switches connect to which. Each switch on your list is asked who it's plugged into (CDP and LLDP). Only switches are drawn: yours, and any others in the address range below.</p>
   </header>
 
   <main>
@@ -28,6 +28,11 @@
         <div class="panel-head"><h2 id="whatTitle">Which switches</h2></div>
         <label class="field"><span>Switches</span><select id="scope"></select></label>
         <p class="hint" id="scopeHint"></p>
+        <label class="field"><span>Also draw switches found in</span>
+          <input id="alsoDraw" type="text" spellcheck="false" autocomplete="off" placeholder="10.0.0.0/16"></label>
+        <p class="hint">A switch your switches see that isn't on the list is drawn too (dashed) if its address is in
+          this range, like <code>10.0.0.0/16</code> or <code>10.0.x.x</code>; separate several with commas. It isn't
+          logged into. Leave it empty to draw only your list.</p>
         <p class="hint">Uses the switch list from the Port Analyzer page. For the whole picture, map every switch; on the
           map you can then show one building, one switch and what it's plugged into, or collapse the closets.</p>
         <p class="hint"><a class="link" href="/network/demo">See a made-up campus</a></p>
@@ -75,7 +80,7 @@
           <dt>Core / distribution</dt><dd>The Nexus switches (and any Catalyst 6500/6800/9600). They do both jobs, so there's no separate distribution row. With no Nexus on the list, the switch linked to the most others.</dd>
           <dt>Access</dt><dd>Everything else: the closets, grouped by building under the core switches they're plugged into.</dd>
           <dt>Your choice</dt><dd>Click a switch on a map and pick its layer, for example Distribution for a switch that feeds other closets. It's saved and every map uses it from then on.</dd>
-          <dt>Links</dt><dd>CDP and LLDP neighbors that are on your switch list. Anything else a switch sees (routers, servers, phones, access points, a switch that isn't on your list) is left out; switches left out are named at the top of the map, in case one should be on your list. A switch on your list that nothing reports, often a Dell next to a Cisco that doesn't run LLDP, is found by its MAC address in the other switches' MAC tables and drawn with a dashed line.</dd>
+          <dt>Links</dt><dd>CDP and LLDP neighbors that are switches: the ones on your list, plus any switch in the address range you give (drawn dashed, since it isn't logged into). Routers, servers, phones and access points are left out, and so is a switch outside the range; those switches are named at the top of the map, in case one should be on your list. A switch on your list that nothing reports, often a Dell next to a Cisco that doesn't run LLDP, is found by its MAC address in the other switches' MAC tables and drawn with a dashed line.</dd>
         </dl>
       </details>
     </section>
@@ -209,8 +214,9 @@
       remember("user", $("#user").value);
       remember("sshUser", $("#sshUser").value);
       remember("networkScope", $("#scope").value);
+      remember("networkAlsoDraw", $("#alsoDraw").value);
       var body = {
-        scope: $("#scope").value,
+        scope: $("#scope").value, also_draw: $("#alsoDraw").value,
         username: $("#user").value, password: $("#pass").value, secret: $("#secret").value,
         ssh_different: $("#sshDifferent").checked,
         ssh_username: $("#sshUser").value, ssh_password: $("#sshPass").value, ssh_secret: $("#sshSecret").value
@@ -229,6 +235,8 @@
       state.switches = data.switches || [];
       $("#user").value = recall("user") || "";
       $("#sshUser").value = recall("sshUser") || "";
+      var also = recall("networkAlsoDraw");
+      $("#alsoDraw").value = also === null ? "10.0.0.0/16" : also;
       $("#sshDifferent").checked = recall("sshDifferent") === "1";
       $("#sshLogin").hidden = !$("#sshDifferent").checked;
       renderScope();

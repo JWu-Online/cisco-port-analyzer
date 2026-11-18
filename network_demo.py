@@ -7,29 +7,30 @@ real switches:
   * closets: Catalyst 9300/3650/2960 stacks (one daisy-chained), a Catalyst 4507 chassis,
     an Aruba seen by LLDP, a Dell nothing reports (found by its MAC address), one that
     refuses the login
-  * neighbors that aren't on the switch list, which the map leaves out: an edge router, a
-    lab switch someone plugged in, a wireless controller, phones and access points
+  * neighbors that aren't on the switch list: two switches in 10.0.x.x, which are drawn
+    (dashed), and an edge router, a lab switch on 192.168.x.x, a wireless controller,
+    phones and access points, which are left out
 """
 
 SWITCHES = [
     # address, type, building, location, hostname, model
     ("10.0.0.1", "cisco_nxos", "M Building", "Main MDF", "CORE-1", "Nexus7000 C7010"),
     ("10.0.0.2", "cisco_nxos", "M Building", "Main MDF", "CORE-2", "Nexus7000 C7010"),
-    ("10.2.1.11", "cisco_ios", "B Building", "B1 IDF", "B1-IDF", "C9300-48P"),
-    ("10.2.1.12", "dell_powerconnect", "B Building", "B2 IDF", "B2-IDF", "5548P"),
-    ("10.2.1.13", "cisco_ios", "B Building", "B3 IDF", "B3-IDF", "WS-C2960X-48FPD-L"),
-    ("10.2.1.14", "cisco_ios", "B Building", "B3 IDF", "B3-IDF-2", "WS-C2960X-48FPD-L"),
-    ("10.2.1.15", "cisco_ios", "B Building", "B4 IDF", "B4-IDF", "C9300-48P"),
-    ("10.2.1.27", "cisco_ios", "B Building", "B127 IDF", "B127-4507", "WS-C4507R+E"),
-    ("10.3.1.11", "cisco_ios", "C Building", "C1 IDF", "C1-IDF", "C9300-48P"),
-    ("10.3.1.12", "cisco_ios", "C Building", "C2 IDF", "C2-IDF", "C9300-48P"),
-    ("10.3.1.13", "cisco_ios", "C Building", "C3 IDF", "C3-IDF", "C9300-24P"),
-    ("10.3.1.14", "aruba_mas", "C Building", "C4 IDF", "C4-IDF", "ArubaS3500-48P"),
-    ("10.3.1.15", "cisco_ios", "C Building", "C5 IDF", "C5-IDF", "C9300-48P"),
+    ("10.0.2.11", "cisco_ios", "B Building", "B1 IDF", "B1-IDF", "C9300-48P"),
+    ("10.0.2.12", "dell_powerconnect", "B Building", "B2 IDF", "B2-IDF", "5548P"),
+    ("10.0.2.13", "cisco_ios", "B Building", "B3 IDF", "B3-IDF", "WS-C2960X-48FPD-L"),
+    ("10.0.2.14", "cisco_ios", "B Building", "B3 IDF", "B3-IDF-2", "WS-C2960X-48FPD-L"),
+    ("10.0.2.15", "cisco_ios", "B Building", "B4 IDF", "B4-IDF", "C9300-48P"),
+    ("10.0.2.27", "cisco_ios", "B Building", "B127 IDF", "B127-4507", "WS-C4507R+E"),
+    ("10.0.3.11", "cisco_ios", "C Building", "C1 IDF", "C1-IDF", "C9300-48P"),
+    ("10.0.3.12", "cisco_ios", "C Building", "C2 IDF", "C2-IDF", "C9300-48P"),
+    ("10.0.3.13", "cisco_ios", "C Building", "C3 IDF", "C3-IDF", "C9300-24P"),
+    ("10.0.3.14", "aruba_mas", "C Building", "C4 IDF", "C4-IDF", "ArubaS3500-48P"),
+    ("10.0.3.15", "cisco_ios", "C Building", "C5 IDF", "C5-IDF", "C9300-48P"),
     ("10.0.1.11", "cisco_ios", "M Building", "M1 IDF", "M1-IDF", "C9300-48P"),
-] + [(f"10.5.1.{10 + i}", "cisco_ios", "E Building", f"E{i} IDF", f"E{i}-IDF",
+] + [(f"10.0.5.{10 + i}", "cisco_ios", "E Building", f"E{i} IDF", f"E{i}-IDF",
       "WS-C3650-48PD" if i % 2 else "C9300-48P") for i in range(1, 9)]
-REFUSES_LOGIN = {"10.2.1.15"}
+REFUSES_LOGIN = {"10.0.2.15"}
 
 # (switch A, port on A, switch B, port on B, how: "cdp" both ends, "lldp" both ends)
 LINKS = [
@@ -53,15 +54,23 @@ LINKS = [
 DELL = "B2-IDF"
 DELL_UPLINK = ("CORE-1", "Ethernet2/2")            # nothing reports this link
 
-# Seen by CDP, not on the switch list: (switch, its port, name, platform, capabilities, their port)
+# Seen by CDP, not on the switch list: (switch, its port, name, address, platform, capabilities, their port)
 NOT_LISTED = [
-    ("CORE-1", "Ethernet6/1", "INET-RTR-1", "cisco ISR4451-X/K9", "Router IGMP", "GigabitEthernet0/0/0"),
-    ("CORE-2", "Ethernet6/1", "INET-RTR-1", "cisco ISR4451-X/K9", "Router IGMP", "GigabitEthernet0/0/1"),
-    ("E2-IDF", "GigabitEthernet1/0/44", "LAB-SW-TEMP", "cisco WS-C2960-24TT-L", "Switch IGMP", "GigabitEthernet0/1"),
-    ("CORE-2", "Ethernet6/2", "WLC-1", "cisco AIR-CT5520-K9", "Router Switch Host", "TenGigabitEthernet0/0/1"),
-    ("E3-IDF", "GigabitEthernet1/0/1", "SEP00112233AA01", "Cisco IP Phone 8845", "Host Phone Two-port Mac Relay",
-     "Port 1"),
-    ("E3-IDF", "GigabitEthernet1/0/28", "AP-E3-28", "cisco AIR-AP2802I-B-K9", "Router Trans-Bridge", "GigabitEthernet0"),
+    ("C5-IDF", "GigabitEthernet1/0/48", "C5-IDF-2", "10.0.3.16", "cisco WS-C2960X-48FPD-L", "Switch IGMP",
+     "GigabitEthernet1/0/49"),                                    # a switch in 10.0.x.x: drawn
+    ("CORE-1", "Ethernet5/9", "E9-IDF", "10.0.5.19", "cisco C9300-48P", "Switch IGMP", "TenGigabitEthernet1/1/1"),
+    ("CORE-2", "Ethernet5/9", "E9-IDF", "10.0.5.19", "cisco C9300-48P", "Switch IGMP", "TenGigabitEthernet2/1/1"),
+    ("CORE-1", "Ethernet6/1", "INET-RTR-1", "10.0.0.254", "cisco ISR4451-X/K9", "Router IGMP",
+     "GigabitEthernet0/0/0"),                                     # a router: left out
+    ("CORE-2", "Ethernet6/1", "INET-RTR-1", "10.0.0.254", "cisco ISR4451-X/K9", "Router IGMP", "GigabitEthernet0/0/1"),
+    ("E2-IDF", "GigabitEthernet1/0/44", "LAB-SW-TEMP", "192.168.1.2", "cisco WS-C2960-24TT-L", "Switch IGMP",
+     "GigabitEthernet0/1"),                                       # a switch outside 10.0.x.x: named, not drawn
+    ("CORE-2", "Ethernet6/2", "WLC-1", "10.0.0.20", "cisco AIR-CT5520-K9", "Router Switch Host",
+     "TenGigabitEthernet0/0/1"),
+    ("E3-IDF", "GigabitEthernet1/0/1", "SEP00112233AA01", "10.0.50.21", "Cisco IP Phone 8845",
+     "Host Phone Two-port Mac Relay", "Port 1"),
+    ("E3-IDF", "GigabitEthernet1/0/28", "AP-E3-28", "10.0.60.28", "cisco AIR-AP2802I-B-K9", "Router Trans-Bridge",
+     "GigabitEthernet0"),
 ]
 
 
@@ -109,9 +118,8 @@ def demo_results():
                                             info[here]["type"] == "cisco_nxos"))
             else:
                 lldp[here].append((local, there, remote))
-    for here, local, name, platform, caps, remote in NOT_LISTED:
-        cdp[here].append(_cdp_block(name, "10.255.0." + str(len(name)), platform, caps, local, remote,
-                                    info[here]["type"] == "cisco_nxos"))
+    for here, local, name, ip, platform, caps, remote in NOT_LISTED:
+        cdp[here].append(_cdp_block(name, ip, platform, caps, local, remote, info[here]["type"] == "cisco_nxos"))
 
     results = []
     for n, (name, d) in enumerate(info.items(), start=1):

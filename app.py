@@ -503,12 +503,17 @@ def network_run():
             problems.append("Enter the password.")
         if "ssh" in used and not logins["ssh"].password:
             problems.append("Enter the SSH password." if payload.get("ssh_different") else "Enter the password.")
+        try:
+            also_draw = network.parse_ranges(str(payload.get("also_draw", ""))[:500])
+        except ValueError as exc:
+            problems.append(str(exc))
         problems = list(dict.fromkeys(problems))
         if problems:
             return jsonify({"ok": False, "problems": problems}), 400
         net_job = analyzer.Job()
         threading.Thread(target=network.run_job,
                          args=(net_job, chosen, logins, load_settings(), NETWORK_DIR, DEBUG_DIR, label),
+                         kwargs={"also_draw": also_draw, "whole_list": load_switches()},
                          daemon=True).start()
     return jsonify({"ok": True})
 

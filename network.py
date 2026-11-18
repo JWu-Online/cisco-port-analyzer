@@ -7,8 +7,9 @@ How it works:
     (Cisco speaks both, Dell and Aruba speak LLDP), plus its model, the MAC address table
     and, on Cisco, the ARP table.
   * Join the neighbors up into links. Each link is usually seen from both ends; it's kept once.
-    Only switches on the list are drawn: a neighbor that isn't on it (a router, a server,
-    a phone) is left out, so the map shows just which of your switches connect to which.
+    Only switches are drawn: the ones on the list, plus any switch they see whose address is
+    in the range you give (10.0.0.0/16 by default), drawn dashed because it wasn't logged
+    into. Routers, servers, phones, access points and switches outside the range are left out.
   * A switch on the list that no neighbor reported (a Dell next to a Cisco without LLDP
     turned on, say) is looked for by its MAC address in the other switches' MAC tables.
   * Decide each switch's layer: the Nexus switches are the core (doing distribution too),
@@ -20,6 +21,7 @@ The drawing itself is laid out by the page (templates/network.html).
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 from collections import deque
@@ -36,6 +38,7 @@ import topology
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 LAYERS = ("core", "distribution", "access")
+DEFAULT_RANGE = "10.0.0.0/16"                  # where our switches' addresses are
 
 COMMANDS = {
     "cisco_ios": {
@@ -171,6 +174,47 @@ def is_network_gear(nb):
     return bool(letters & {"B", "R"}) and not letters & {"W", "T", "A", "P"}
 
 
+def is_switch(nb):
+    """A neighbor that says it's a switch (CDP 'Switch', LLDP 'B' for bridge)."""
+    return bool(re.search(r"(?i)\bswitch\b|\bB\b", nb["caps"]))
+
+
+def parse_ranges(text):
+    """'10.0.0.0/16, 10.9.x.x' -> [IPv4Network]. Empty -> []. Raises ValueError with a message to show."""
+    nets = []
+    for part in re.split(r"[\s,;]+", (text or "").strip()):
+        if not part:
+            continue
+        token = part.lower().rstrip(".")
+        if "/" not in token:                           # 10.0.x.x, 10.0.*, 10.0 -> the fixed octets
+            octets = token.split(".")
+            fixed = []
+            for o in octets:
+                if o in ("x", "*"):
+                    break
+                fixed.append(o)
+            if len(octets) > 4 or any(o not in ("x", "*") for o in octets[len(fixed):]) or not fixed:
+                fixed = None
+            if fixed:
+                token = ".".join(fixed + ["0"] * (4 - len(fixed))) + f"/{8 * len(fixed)}"
+        try:
+            net = ipaddress.ip_network(token, strict=False)
+        except ValueError:
+            net = None
+        if net is None or net.version != 4:
+            raise ValueError(f"'{part}' isn't an address range. Use something like 10.0.0.0/16 or 10.0.x.x.")
+        nets.append(net)
+    return nets
+
+
+def in_ranges(ip, nets):
+    try:
+        addr = ipaddress.ip_address((ip or "").strip())
+    except ValueError:
+        return False
+    return any(addr in net for net in nets)
+
+
 def neighbors_from(outputs, vendor):
     """Every network-gear neighbor a switch reported, by CDP and LLDP."""
     if vendor in ("dell_powerconnect", "aruba_mas"):
@@ -291,9 +335,25 @@ def _port(name):
     return topology.normalize_intf(name)
 
 
-def build_map(results, overrides=None, scope="", now=None):
-    """results: [{"switch": row from the list, "outputs": {...} or None, "problem": ""}] -> page data."""
+def _node(node_id, name, address, model="", building="", location="", type_="", on_list=False, listed=False):
+    hint, why = layer_hint(model, type_)
+    return {
+        "id": node_id, "name": name, "address": address, "listed": listed, "on_list": on_list,
+        "type": type_, "os": sw.TYPES.get(type_, type_), "model": model, "building": building,
+        "building_guess": False, "location": location, "obs_location": "", "list_type": type_ if on_list else "",
+        "list_address": address if on_list else "", "observium_id": None, "kind": "network", "read": False,
+        "problem": "", "seen_by": [], "hint": hint, "hint_why": why, "_macs": set(),
+    }
+
+
+def build_map(results, overrides=None, scope="", now=None, also_draw=None, whole_list=None):
+    """results: [{"switch": row from the list, "outputs": {...} or None, "problem": ""}] -> page data.
+
+    also_draw: address ranges (from parse_ranges); a switch a neighbor reports in one of them is drawn
+    even though it isn't on the list. whole_list: the whole switch list, when only part of it was read
+    (one building), so a neighbor that's on the list but wasn't read is still drawn as yours."""
     overrides = overrides or {}
+    also_draw = also_draw or []
     now = now or datetime.now()
     nodes, by_ip, by_name, by_mac = {}, {}, {}, {}
     for res in results:
@@ -301,15 +361,9 @@ def build_map(results, overrides=None, scope="", now=None):
         outputs = res.get("outputs") or {}
         ident = switch_identity(outputs, s["type"]) if outputs else {"hostname": "", "model": "", "macs": set()}
         node_id = s["address"]
-        hint, why = layer_hint(ident["model"], s["type"])
-        nodes[node_id] = {
-            "id": node_id, "name": ident["hostname"] or s["address"], "address": s["address"], "listed": True,
-            "type": s["type"], "os": sw.TYPES.get(s["type"], s["type"]), "model": ident["model"],
-            "building": s.get("building", ""), "location": s.get("location", ""), "obs_location": "",
-            "on_list": True, "list_type": s["type"], "list_address": s["address"], "observium_id": None,
-            "kind": "network", "read": bool(outputs), "problem": res.get("problem", ""), "hint": hint,
-            "hint_why": why, "_macs": ident["macs"],
-        }
+        node = nodes[node_id] = _node(node_id, ident["hostname"] or s["address"], s["address"], ident["model"],
+                                      s.get("building", ""), s.get("location", ""), s["type"], True, True)
+        node.update(read=bool(outputs), problem=res.get("problem", ""), _macs=ident["macs"])
         by_ip[s["address"]] = node_id
         if ident["hostname"]:
             by_name[ident["hostname"].lower()] = node_id
@@ -317,12 +371,40 @@ def build_map(results, overrides=None, scope="", now=None):
             by_mac[mac] = node_id
 
     left_out = {}                                           # neighbors not on the list: name -> platform
+    not_read = {s["address"]: s for s in (whole_list or []) if s["address"] not in nodes}
+    reported = []                                           # (switch that reported it, neighbor)
+    for res in results:
+        if res.get("outputs"):
+            reported += [(res["switch"]["address"], nb) for nb in neighbors_from(res["outputs"], res["switch"]["type"])]
+
+    def chassis_mac(nb):
+        raw = re.sub(r"[^0-9a-fA-F]", "", nb["chassis"] or "")
+        return portdocs.mac_dotted(nb["chassis"]) if len(raw) == 12 and re.search(r"[0-9a-fA-F]{4}", nb["chassis"]) else ""
+
+    # Switches the ones on the list see that get drawn too: on the list but not read this time, or in the range
+    for _, nb in sorted(reported, key=lambda r: not r[1]["ip"]):         # the ones that give an address first
+        if not nb["ip"] or nb["ip"] in by_ip or (nb["name"] and nb["name"].lower() in by_name) \
+                or (chassis_mac(nb) and chassis_mac(nb) in by_mac):
+            continue
+        model = re.sub(r"(?i)^cisco\s+", "", nb["platform"])
+        s = not_read.get(nb["ip"])
+        if s:
+            node = _node(nb["ip"], nb["name"] or nb["ip"], nb["ip"], model, s.get("building", ""),
+                         s.get("location", ""), s["type"], True)
+        elif is_switch(nb) and in_ranges(nb["ip"], also_draw):
+            node = _node(nb["ip"], nb["name"] or nb["ip"], nb["ip"], model)
+        else:
+            continue
+        nodes[node["id"]] = node
+        by_ip[nb["ip"]] = node["id"]
+        if nb["name"]:
+            by_name[nb["name"].lower()] = node["id"]
+        if chassis_mac(nb):
+            by_mac[chassis_mac(nb)] = node["id"]
 
     def resolve(nb):
         """The switch on the list a neighbor is, or None (it's left out)."""
-        for key, table in ((nb["ip"], by_ip), (nb["name"].lower(), by_name),
-                           (portdocs.mac_dotted(nb["chassis"]) if re.search(r"[0-9a-fA-F]{4}", nb["chassis"] or "")
-                            and len(re.sub(r"[^0-9a-fA-F]", "", nb["chassis"])) == 12 else "", by_mac)):
+        for key, table in ((nb["ip"], by_ip), (nb["name"].lower(), by_name), (chassis_mac(nb), by_mac)):
             if key and key in table:
                 node = nodes[table[key]]
                 if not node["read"] and nb["name"] and node["name"] == node["address"]:
@@ -333,32 +415,26 @@ def build_map(results, overrides=None, scope="", now=None):
                         node["hint"], node["hint_why"] = layer_hint(node["model"], node["type"])
                 return table[key]
         label = nb["name"] or nb["ip"] or nb["chassis"]
-        if label and re.search(r"(?i)\bswitch\b|\bB\b", nb["caps"]):
+        if label and is_switch(nb):
             left_out.setdefault(label, re.sub(r"(?i)^cisco\s+", "", nb["platform"]))
         return None
 
     # Links, each kept once however many times (and from which ends) it was reported
     links = {}
     link_ports = {}                                         # node -> ports that lead to another node
-    counts = {}
-    for res in results:
-        outputs = res.get("outputs")
-        if not outputs:
+    counts = {r["switch"]["address"]: 0 for r in results if r.get("outputs")}
+    for here, nb in reported:
+        counts[here] = counts.get(here, 0) + 1
+        link_ports.setdefault(here, set()).add(analyzer.match_key(nb["local"]))       # leads somewhere else
+        there = resolve(nb)
+        if there is None or there == here:
             continue
-        here = res["switch"]["address"]
-        found = neighbors_from(outputs, res["switch"]["type"])
-        counts[here] = len(found)
-        for nb in found:
-            link_ports.setdefault(here, set()).add(analyzer.match_key(nb["local"]))   # leads somewhere else
-            there = resolve(nb)
-            if there is None or there == here:
-                continue
-            a, b = sorted([(here, _port(nb["local"])), (there, _port(nb["port"]))])
-            pair = (a[0], b[0])
-            entry = links.setdefault(pair, {"a": a[0], "b": b[0], "pairs": {}})
-            key = (a[1], b[1])
-            entry["pairs"].setdefault(key, set()).add(nb["source"])
-            link_ports.setdefault(there, set()).add(analyzer.match_key(nb["port"]))
+        if not nodes[there]["listed"] and nodes[here]["name"] not in nodes[there]["seen_by"]:
+            nodes[there]["seen_by"].append(nodes[here]["name"])
+        a, b = sorted([(here, _port(nb["local"])), (there, _port(nb["port"]))])
+        entry = links.setdefault((a[0], b[0]), {"a": a[0], "b": b[0], "pairs": {}})
+        entry["pairs"].setdefault((a[1], b[1]), set()).add(nb["source"])
+        link_ports.setdefault(there, set()).add(analyzer.match_key(nb["port"]))
 
     # Switches on the list that nothing reported: look for them in the MAC tables
     arp = {}
@@ -400,6 +476,12 @@ def build_map(results, overrides=None, scope="", now=None):
         adjacency[b].add(a)
     assign_layers(nodes, adjacency)
     for node_id, node in nodes.items():
+        if not node["on_list"]:                    # the building of the closets it's plugged into, if they agree
+            near = {nodes[m]["building"] for m in adjacency[node_id]
+                    if nodes[m]["on_list"] and nodes[m]["building"] and nodes[m]["layer_auto"] != "core"}
+            if len(near) == 1:
+                node["building"], node["building_guess"] = near.pop(), True
+    for node_id, node in nodes.items():
         node["layer"] = overrides.get(node_id) if overrides.get(node_id) in LAYERS else node["layer_auto"]
         node["links"] = len(adjacency[node_id])
         for key in ("hint", "hint_why", "_macs"):
@@ -419,10 +501,19 @@ def build_map(results, overrides=None, scope="", now=None):
     if alone:
         warnings.append(f"{len(alone)} switch(es) aren't linked to any other switch on your list: "
                         + ", ".join(n["name"] for n in alone[:8]) + (" ..." if len(alone) > 8 else "") + ".")
+    extra = [n for n in nodes.values() if not n["on_list"]]
+    ranges = ", ".join(str(n) for n in also_draw)
+    if extra:
+        names = sorted((n["name"] for n in extra), key=str.lower)
+        warnings.append(f"Drawn dashed: {len(names)} switch(es) in {ranges} that aren't on your list "
+                        f"({', '.join(names[:8])}{' ...' if len(names) > 8 else ''}). They weren't logged into, so "
+                        "only their links to your switches are shown; add them to the switch list to see what's "
+                        "plugged into them.")
     if left_out:
         names = sorted(left_out, key=str.lower)
-        warnings.append(f"Not drawn: {len(names)} neighbor(s) that call themselves switches but aren't on your list "
-                        f"({', '.join(names[:8])}{' ...' if len(names) > 8 else ''}). If one of them is yours, "
+        warnings.append(f"Not drawn: {len(names)} neighbor(s) that call themselves switches but aren't on your list"
+                        + (f" or in {ranges}" if ranges else "")
+                        + f" ({', '.join(names[:8])}{' ...' if len(names) > 8 else ''}). If one of them is yours, "
                         "add it to the switch list and draw the map again.")
 
     out_links = []
@@ -431,13 +522,15 @@ def build_map(results, overrides=None, scope="", now=None):
                  for (pa, pb), src in sorted(entry["pairs"].items())]
         out_links.append({"a": a, "b": b, "pairs": pairs,
                           "mac": all(p["found_by"] == "MAC table" for p in pairs)})
-    listed = list(nodes.values())
+    listed = [n for n in nodes.values() if n["listed"]]
     return {
         "title": "Network map", "source": scope, "drawn": now.strftime("%Y-%m-%d %H:%M"), "web": "",
-        "nodes": sorted(listed, key=lambda n: (n["building"], n["location"], n["name"].lower())),
+        "ranges": ranges,
+        "nodes": sorted(nodes.values(), key=lambda n: (n["building"], n["location"], n["name"].lower())),
         "links": out_links, "warnings": warnings,
         "summary": {"listed": len(listed), "read": len([n for n in listed if n["read"]]),
-                    "links": len(out_links), "left_out": len(left_out),
+                    "links": len(out_links), "left_out": len(left_out), "extra": len(extra),
+                    "not_in_run": len([n for n in nodes.values() if n["on_list"] and not n["listed"]]),
                     "layers": {layer: len([n for n in nodes.values() if n["layer"] == layer]) for layer in LAYERS}},
         "neighbors": counts,
     }
@@ -503,7 +596,7 @@ def save_debug(debug_dir, address, outputs):
     return path
 
 
-def run_job(job, switch_list, logins, settings, data_dir, debug_dir, scope_label):
+def run_job(job, switch_list, logins, settings, data_dir, debug_dir, scope_label, also_draw=None, whole_list=None):
     """Read every switch, a few at a time, then draw and save the map."""
     job.state = "running"
     try:
@@ -535,13 +628,14 @@ def run_job(job, switch_list, logins, settings, data_dir, debug_dir, scope_label
             job.log("Stopped. Nothing was drawn.", "warn")
             return
         results.sort(key=lambda r: analyzer.port_key(r["switch"]["address"]))
-        data = build_map(results, load_overrides(data_dir), scope_label)
+        data = build_map(results, load_overrides(data_dir), scope_label, also_draw=also_draw, whole_list=whole_list)
         path = save_page(data_dir, render_html(data))
         job.report_file = path
         s = data["summary"]
         job.log(f"Done. {s['read']} of {s['listed']} switches read, {s['links']} links, "
                 f"{s['layers']['core']} core, {s['layers']['distribution']} distribution, "
-                f"{s['layers']['access']} access.", "done")
+                f"{s['layers']['access']} access"
+                + (f", {s['extra']} not on your list drawn dashed" if s["extra"] else "") + ".", "done")
         job.state = "done"
     except Exception as exc:
         job.state = "failed"
@@ -560,7 +654,7 @@ def _read_one(job, switch, login, timeout):
 def run_demo(data_dir=None, save=False, overrides=None):
     """A made-up campus, so you can see the page without any switches."""
     from network_demo import demo_results
-    data = build_map(demo_results(), overrides or {}, "made-up sample campus")
+    data = build_map(demo_results(), overrides or {}, "made-up sample campus", also_draw=parse_ranges(DEFAULT_RANGE))
     data["demo"] = True
     html = render_html(data)
     return data, html, save_page(data_dir, html) if save and data_dir else None

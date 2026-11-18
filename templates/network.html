@@ -153,13 +153,13 @@
 <main>
   <a class="back" href="/network">&larr; Network map</a>
   <h1>Network map</h1>
-  <p class="sub">{{ data.source }} · drawn {{ data.drawn }} · {{ data.summary.read }} of {{ data.summary.listed }} switches read{% if data.demo %} · <strong>made-up sample</strong>{% endif %}</p>
+  <p class="sub">{{ data.source }} · drawn {{ data.drawn }} · {{ data.summary.read }} of {{ data.summary.listed }} switches read{% if data.summary.extra %} · {{ data.summary.extra }} more found in {{ data.ranges }}{% endif %}{% if data.demo %} · <strong>made-up sample</strong>{% endif %}</p>
 
   <div class="totals">
     <div class="total"><div class="total-label"><span class="sw core"></span><span id="n-core">Core</span></div><div class="total-value" id="t-core">{{ data.summary.layers.core }}</div><div class="total-note">fast backbone between buildings</div></div>
     <div class="total" id="tile-distribution"><div class="total-label"><span class="sw distribution"></span>Distribution</div><div class="total-value" id="t-distribution">{{ data.summary.layers.distribution }}</div><div class="total-note" id="note-distribution">joins a building's closets to the core</div></div>
     <div class="total"><div class="total-label"><span class="sw access"></span>Access</div><div class="total-value" id="t-access">{{ data.summary.layers.access }}</div><div class="total-note">where people and devices plug in</div></div>
-    <div class="total"><div class="total-label">Links</div><div class="total-value">{{ data.summary.links }}</div><div class="total-note">between switches on your list</div></div>
+    <div class="total"><div class="total-label">Links</div><div class="total-value">{{ data.summary.links }}</div><div class="total-note">between the switches drawn</div></div>
   </div>
   {% for w in data.warnings %}<p class="notice">{{ w }}</p>{% endfor %}
 
@@ -180,6 +180,7 @@
     <label><input type="checkbox" class="show-layer" value="core" checked> <span class="core-name">Core</span></label>
     <label><input type="checkbox" class="show-layer" value="distribution" checked> Distribution</label>
     <label><input type="checkbox" class="show-layer" value="access" checked> Access</label>
+    <label id="others-label"{% if not data.summary.extra %} hidden{% endif %}><input type="checkbox" id="others" checked> Not on your list</label>
     <span class="sep"></span>
     <label><input type="checkbox" id="collapse"> Collapse closets</label>
   </div>
@@ -195,6 +196,7 @@
     <span><svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" class="edge thick"/></svg>2 or more links</span>
     <span><svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" class="edge mac"/></svg>found by MAC address</span>
     <span><svg width="14" height="14"><circle cx="7" cy="7" r="6" class="bad" fill="#B42318"/></svg>couldn't log in</span>
+    {% if data.summary.extra %}<span><svg width="30" height="16"><rect x="1" y="1" width="28" height="14" rx="3" fill="none" stroke="currentColor" stroke-dasharray="4 3" opacity=".7"/></svg>not on your list (not logged into)</span>{% endif %}
     <span><svg width="38" height="18"><rect x="5" y="1" width="32" height="12" rx="3" fill="none" stroke="currentColor" opacity=".5"/><rect x="1" y="5" width="32" height="12" rx="3" fill="var(--surface)" stroke="currentColor"/></svg>closets, collapsed (click to open)</span>
   </div>
 
@@ -270,13 +272,13 @@
     return out;
   }
   function visible() {
-    var nodes = D.nodes.filter(function (n) { return (state.others || n.listed) && state.show[layerOf(n)]; });
+    var nodes = D.nodes.filter(function (n) { return (state.others || n.on_list) && state.show[layerOf(n)]; });
     if (state.focus && byId[state.focus]) {
       // One switch and everything it's plugged into
       var near = {};
       near[state.focus] = true;
       neighbours(state.focus).forEach(function (m) { near[m] = true; });
-      nodes = D.nodes.filter(function (n) { return near[n.id] && (state.others || n.listed || n.id === state.focus); });
+      nodes = D.nodes.filter(function (n) { return near[n.id] && (state.others || n.on_list || n.id === state.focus); });
     } else if (state.dist && byId[state.dist]) {
       // A distribution switch (and its partner), the core above it and the closets below it
       var keep = {}, queue = [state.dist];
@@ -326,7 +328,7 @@
     view.links.forEach(function (l) { adj[l.a].push(l.b); adj[l.b].push(l.a); });
     var isAccess = function (id) { return layerOf(byId[id]) === "access"; };
     var core = view.nodes.filter(function (n) { return layerOf(n) === "core"; })
-      .sort(function (a, b) { return (a.listed === b.listed ? 0 : a.listed ? -1 : 1) || natural(a.name, b.name); });
+      .sort(function (a, b) { return (a.on_list === b.on_list ? 0 : a.on_list ? -1 : 1) || natural(a.name, b.name); });
     var dist = view.nodes.filter(function (n) { return layerOf(n) === "distribution"; })
       .sort(function (a, b) { return natural(a.building, b.building) || natural(a.name, b.name); });
     var access = view.nodes.filter(function (n) { return layerOf(n) === "access"; })
@@ -396,8 +398,8 @@
     });
     var coreFam = { dist: [], clusters: [], core: true }, looseFam = { dist: [], clusters: [], loose: true };
     Object.keys(clusters).sort(function (a, b) {
-      var A = clusters[a], B = clusters[b];
-      return natural(byId[A.members[0]].building, byId[B.members[0]].building) ||
+      var A = clusters[a], B = clusters[b], ba = byId[A.members[0]].building, bb = byId[B.members[0]].building;
+      return (!ba - !bb) || natural(ba, bb) ||                     // closets with no building go last
              natural(byId[A.members[0]].location, byId[B.members[0]].location);
     }).forEach(function (k) {
       var c = clusters[k];
@@ -559,7 +561,8 @@
         }
       }
       // Which building these closets are in, just above them
-      var bname = byId[c.members[0]].building;
+      var bname = byId[c.members[0]].building ||
+        (c.members.every(function (m) { return !byId[m].on_list; }) ? "Not on your list" : "");
       if (bname && !c.collapsed) {                  // (a collapsed box says its building itself)
         var room = Math.floor((c.width - (!state.collapse || state.focus || c.members.length < 2 ? 0 : 70)) / 6.2);
         var bt = svg("text", { x: c.x + 2, y: L.rows.access - 7, "class": "bldg" }, edges);
@@ -641,7 +644,7 @@
       svg("rect", { x: 4, y: -4, width: W, height: H, rx: 6, "class": "behind" }, g);
       svg("rect", { width: W, height: H, rx: 6, "class": "box" }, g);
       svg("rect", { width: 5, height: H - 2, x: 1, y: 1, rx: 2, "class": "stripe access" }, g);
-      var down = c.members.filter(function (id) { return !byId[id].read; }).length;
+      var down = c.members.filter(function (id) { return byId[id].listed && !byId[id].read; }).length;
       var name = svg("text", { x: 14, y: 19, "class": "name" }, g);
       name.textContent = n + " closet switches" + (down ? " (" + down + " down)" : "");
       var buildings = {};
@@ -660,7 +663,7 @@
     view.nodes.forEach(function (n) {
       var p = P[n.id], layer = layerOf(n);
       if (!p) return;                                                           // inside a collapsed group
-      var g = svg("g", { transform: "translate(" + p.x + "," + p.y + ")", "class": "node" + (n.listed ? "" : " other"),
+      var g = svg("g", { transform: "translate(" + p.x + "," + p.y + ")", "class": "node" + (n.on_list ? "" : " other"),
                          tabindex: 0, role: "button", "aria-label": n.name + ", " + NAMES[layer] }, nodesG);
       g.dataset.id = n.id;
       svg("rect", { width: W, height: H, rx: 6, "class": "box" }, g);
@@ -668,8 +671,9 @@
       var name = svg("text", { x: 14, y: 19, "class": "name" }, g);
       name.textContent = clip(n.name, 21);
       var meta = svg("text", { x: 14, y: 36, "class": "meta" }, g);
-      meta.textContent = clip([n.location || n.building, n.model].filter(Boolean).join(" · "), 29);
-      if (!n.read) {
+      meta.textContent = clip([n.on_list ? n.location || n.building : "not on your list", n.model]
+        .filter(Boolean).join(" · "), 29);
+      if (n.listed && !n.read) {
         svg("circle", { cx: W - 12, cy: 12, r: 7, "class": "bad" }, g);
         var t = svg("text", { x: W - 12, y: 16, "class": "bad-text", "text-anchor": "middle" }, g);
         t.textContent = "!";
@@ -739,7 +743,8 @@
     tip.appendChild(el("div", "muted", [n.address, n.model, [n.building, n.location].filter(Boolean).join(", ")].filter(Boolean).join(" · ")));
     var layer = layerOf(n);
     tip.appendChild(el("div", null, layerName(layer) + (layer !== n.layer_auto ? " (you set this)" : "")));
-    if (!n.read) tip.appendChild(el("div", "problem", "Couldn't log in: " + (n.problem || "no answer")));
+    if (n.listed && !n.read) tip.appendChild(el("div", "problem", "Couldn't log in: " + (n.problem || "no answer")));
+    else if (!n.on_list) tip.appendChild(el("div", "muted", "Not on your list: seen by " + n.seen_by.join(", ")));
     var ports = portList(n.id), ul = el("ul");
     ports.slice(0, 10).forEach(function (p) {
       ul.appendChild(el("li", null, (p.here || "?") + " → " + p.other.name + (p.there ? " " + p.there : "")));
@@ -756,7 +761,7 @@
     var ul = el("ul");
     c.members.slice(0, 12).forEach(function (id) {
       var n = byId[id];
-      ul.appendChild(el("li", null, n.name + (n.location ? " · " + n.location : "") + (n.read ? "" : " (down)")));
+      ul.appendChild(el("li", null, n.name + (n.location ? " · " + n.location : "") + (n.listed && !n.read ? " (down)" : "")));
     });
     if (c.members.length > 12) ul.appendChild(el("li", "muted", "and " + (c.members.length - 12) + " more"));
     tip.appendChild(ul);
@@ -793,16 +798,20 @@
     document.getElementById("d-title").textContent = n.name;
     document.getElementById("d-sub").textContent = layerName(layerOf(n));
     var prob = document.getElementById("d-problem");
-    prob.hidden = n.read;
+    prob.hidden = n.read || !n.listed;
     prob.textContent = "Couldn't log in: " + (n.problem || "no answer") + ". Drawn where its neighbors say it is.";
     var dl = document.getElementById("d-facts");
     dl.textContent = "";
     fact(dl, "Address", n.address);
     fact(dl, "Model", n.model);
     fact(dl, "Type", n.os);
-    fact(dl, "Building", n.building);
+    fact(dl, "Building", n.building && n.building_guess ? n.building + " (going by what it's plugged into)" : n.building);
     fact(dl, "Location", n.location);
     fact(dl, "Links", String(linksOf(id).length));
+    if (!n.on_list) fact(dl, "Not on your list", "Found by CDP/LLDP from " + n.seen_by.join(", ") +
+      ". It wasn't logged into, so only its links to your switches are shown.");
+    else if (!n.listed) fact(dl, "Not read", "It's on your list but wasn't part of this map (" + D.source +
+      "), so only its links to the switches that were read are shown.");
 
     var sel = document.getElementById("d-layer");
     sel.textContent = "";
@@ -942,6 +951,7 @@
   document.querySelectorAll(".show-layer").forEach(function (box) {
     box.addEventListener("change", function () { state.show[box.value] = box.checked; refresh(); });
   });
+  document.getElementById("others").addEventListener("change", function (e) { state.others = e.target.checked; refresh(); });
   var collapse = document.getElementById("collapse");
   collapse.checked = state.collapse;
   collapse.addEventListener("change", function () { state.collapse = collapse.checked; state.open = {}; refresh(); });

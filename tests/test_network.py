@@ -183,6 +183,22 @@ def parsers():
                                               "WS-C4507R+E", "C9500-24Y4C", "C9300-48P", "PowerConnect 5548P", "")]
                 == ["core", "core", "core", "core", None, None, None, None, None])
     ok &= check("a Nexus on the list is core even if its model wasn't read", N.layer_hint("", "cisco_nxos")[0] == "core")
+
+    print("\nAddress ranges")
+    ok &= check("10.0.0.0/16, 10.0.x.x, 10.0.*, 10.0 all mean the same; several with commas; empty is none",
+                [N.parse_ranges(t) for t in ("10.0.0.0/16", "10.0.x.x", "10.0.*", "10.0.")] == [[N.ipaddress.ip_network("10.0.0.0/16")]] * 4
+                and [str(n) for n in N.parse_ranges("10.0.0.0/16, 172.16.5.x")] == ["10.0.0.0/16", "172.16.5.0/24"]
+                and N.parse_ranges("  ") == [] and N.parse_ranges("10.0.3.7") == [N.ipaddress.ip_network("10.0.3.7/32")])
+    bad = []
+    for text in ("10.x.0.1", "switches", "10.0.0.0/33", "fe80::/10"):
+        try:
+            N.parse_ranges(text)
+        except ValueError as exc:
+            bad.append(str(exc))
+    ok &= check("anything else is refused with an example", len(bad) == 4 and all("10.0.x.x" in b for b in bad), bad)
+    nets = N.parse_ranges("10.0.0.0/16")
+    ok &= check("in the range or not", N.in_ranges("10.0.200.3", nets) and not N.in_ranges("10.1.0.3", nets)
+                and not N.in_ranges("", nets) and not N.in_ranges("10.0.0.1", []))
     nodes = {k: {"hint": None, "hint_why": ""} for k in "ABCDEFG"}
     adj = {"A": {"B", "C", "G"}, "B": {"A", "D", "E"}, "C": {"A", "F"}, "D": {"B"}, "E": {"B"}, "F": {"C"}, "G": {"A"}}
     N.assign_layers(nodes, adj)
@@ -196,24 +212,39 @@ def parsers():
 def demo_map():
     ok = True
     print("\nThe made-up campus")
-    data = N.build_map(ND.demo_results(), {}, "test")
+    nets = N.parse_ranges(N.DEFAULT_RANGE)
+    data = N.build_map(ND.demo_results(), {}, "test", also_draw=nets)
     by = {n["name"]: n for n in data["nodes"]}
     layers = {name: n["layer"] for name, n in by.items()}
     ok &= check("the two Nexus are the core, every closet (the 4507 too) is access, no distribution row",
                 sorted(k for k, v in layers.items() if v == "core") == ["CORE-1", "CORE-2"]
-                and layers["B127-4507"] == "access" and len([v for v in layers.values() if v == "access"]) == 20
+                and layers["B127-4507"] == "access" and len([v for v in layers.values() if v == "access"]) == 22
                 and data["summary"]["layers"]["distribution"] == 0, layers)
-    ok &= check("only switches on the list are drawn: no router, wireless controller, lab switch, phone or AP",
-                sorted(by) == sorted(s[4] for s in ND.SWITCHES), sorted(set(by) ^ {s[4] for s in ND.SWITCHES}))
-    ok &= check("a switch that isn't on the list is named in a warning, in case it should be",
-                any("LAB-SW-TEMP" in w and "aren't on your list" in w for w in data["warnings"])
-                and not any("INET-RTR" in w or "SEP00" in w for w in data["warnings"]), data["warnings"])
+    ours = {s[4] for s in ND.SWITCHES}
+    ok &= check("drawn: the list plus the two switches in 10.0.x.x; no router, wireless controller, phone, AP or "
+                "the lab switch on 192.168", set(by) == ours | {"C5-IDF-2", "E9-IDF"}, sorted(set(by) ^ ours))
+    extra = by["C5-IDF-2"]
+    ok &= check("a switch that isn't on the list: dashed, not logged into, who saw it, building of the closet "
+                "it hangs off", not extra["on_list"] and not extra["listed"] and not extra["read"]
+                and extra["seen_by"] == ["C5-IDF"] and extra["building"] == "C Building" and extra["building_guess"]
+                and extra["model"] == "WS-C2960X-48FPD-L" and extra["layer"] == "access"
+                and "through 1 other switch" in extra["layer_why"], extra)
+    ok &= check("one plugged straight into the core: no building guessed (the core's isn't its)",
+                by["E9-IDF"]["building"] == "" and sorted(by["E9-IDF"]["seen_by"]) == ["CORE-1", "CORE-2"]
+                and by["E9-IDF"]["links"] == 2, by["E9-IDF"])
+    ok &= check("warnings: the ones drawn dashed, and the switch outside the range named but not drawn",
+                any("Drawn dashed: 2" in w and "C5-IDF-2, E9-IDF" in w for w in data["warnings"])
+                and any("LAB-SW-TEMP" in w and "or in 10.0.0.0/16" in w for w in data["warnings"])
+                and not any("INET-RTR" in w or "WLC" in w or "SEP00" in w for w in data["warnings"]), data["warnings"])
+    ok &= check("totals: 22 on the list, 21 read, 2 more found", data["summary"]["listed"] == 22
+                and data["summary"]["read"] == 21 and data["summary"]["extra"] == 2, data["summary"])
     links = {(by_id(data, l["a"]), by_id(data, l["b"])): l for l in data["links"]}
     pairs = {tuple(sorted(k)): v for k, v in links.items()}
-    ok &= check("each link once, though both ends report it", len(data["links"]) == 35
+    ok &= check("each link once, though both ends report it", len(data["links"]) == 38
                 and pairs[("CORE-1", "CORE-2")]["pairs"] == [{"a_port": "Eth1/1", "b_port": "Eth1/1", "found_by": "CDP"},
-                                                              {"a_port": "Eth1/2", "b_port": "Eth1/2", "found_by": "CDP"}],
-                len(data["links"]))
+                                                              {"a_port": "Eth1/2", "b_port": "Eth1/2", "found_by": "CDP"}]
+                and pairs[("C5-IDF", "C5-IDF-2")]["pairs"] == [{"a_port": "Gi1/0/48", "b_port": "Gi1/0/49",
+                                                                 "found_by": "CDP"}], len(data["links"]))
     aruba = pairs.get(("C4-IDF", "CORE-1"))
     ok &= check("the Aruba by LLDP, seen from both ends", aruba and len(aruba["pairs"]) == 1
                 and aruba["pairs"][0]["found_by"] == "LLDP"
@@ -222,19 +253,38 @@ def demo_map():
     ok &= check("the Dell nothing reports: found by MAC on CORE-1 Eth2/2, not on CORE-2's link to CORE-1",
                 dell and dell["mac"] and "Eth2/2" in (dell["pairs"][0]["a_port"], dell["pairs"][0]["b_port"])
                 and ("B2-IDF", "CORE-2") not in pairs, dell)
-    ok &= check("the switch that refused the login: named and placed by its neighbor's CDP",
-                not by["B4-IDF"]["read"] and ("B4-IDF", "CORE-1") in pairs
+    ok &= check("the switch that refused the login: named and placed by its neighbor's CDP, not drawn twice",
+                not by["B4-IDF"]["read"] and by["B4-IDF"]["listed"] and ("B4-IDF", "CORE-1") in pairs
+                and len([n for n in data["nodes"] if n["address"] == "10.0.2.15"]) == 1
                 and any("couldn't be read" in w for w in data["warnings"]), by.get("B4-IDF"))
     ok &= check("daisy chain kept: B3-IDF-2 hangs off B3-IDF", ("B3-IDF", "B3-IDF-2") in pairs
                 and "through 1 other switch" in by["B3-IDF-2"]["layer_why"])
-    moved = N.build_map(ND.demo_results(), {"10.2.1.27": "distribution"}, "test")
+
+    only = N.build_map(ND.demo_results(), {}, "test")
+    ok &= check("with no range: only the list is drawn, and the other switches are named instead",
+                {n["name"] for n in only["nodes"]} == ours and len(only["links"]) == 35
+                and any("C5-IDF-2, E9-IDF, LAB-SW-TEMP" in w and "or in" not in w for w in only["warnings"]),
+                only["warnings"])
+    part = [r for r in ND.demo_results() if r["switch"]["building"] == "B Building"]
+    one = N.build_map(part, {}, "B Building", also_draw=nets, whole_list=ND.demo_switch_list())
+    cores = [n for n in one["nodes"] if n["name"].startswith("CORE")]
+    ok &= check("one building: the cores it's plugged into are drawn as yours (on the list, not read this time)",
+                len(cores) == 2 and all(n["on_list"] and not n["listed"] and n["layer"] == "core"
+                                        and n["building"] == "M Building" for n in cores)
+                and one["summary"]["listed"] == 6 and one["summary"]["extra"] == 0
+                and not any("Drawn dashed" in w for w in one["warnings"]), [(n["name"], n["on_list"]) for n in cores])
+
+    moved = N.build_map(ND.demo_results(), {"10.0.2.27": "distribution"}, "test", also_draw=nets)
     sw4507 = next(n for n in moved["nodes"] if n["name"] == "B127-4507")
     ok &= check("a layer you pick wins, and automatic is remembered",
                 sw4507["layer"] == "distribution" and sw4507["layer_auto"] == "access", sw4507)
     html = N.render_html(data)
     ok &= check("page renders with the data and the filters", '"CORE-1"' in html and 'id="collapse"' in html
                 and 'id="dist"' in html and "show-layer" in html and "LAB-SW-TEMP" in html
-                and '"INET-RTR-1"' not in html)
+                and '"INET-RTR-1"' not in html and "2 more found in 10.0.0.0/16" in html
+                and '<label id="others-label">' in html)
+    ok &= check("no 'Not on your list' filter when there's nothing to hide",
+                '<label id="others-label" hidden>' in N.render_html(only))
     return ok
 
 
@@ -287,7 +337,11 @@ def full_run():
                 and client.get("/network/demo", **base).status_code == 200)
     r = client.post("/api/network/run", json={"scope": "", "username": "netops"}, **base)
     ok &= check("no password -> asked for it", r.status_code == 400, r.json)
-    r = client.post("/api/network/run", json={"scope": "", **login}, **base)
+    r = client.post("/api/network/run", json={"scope": "", "also_draw": "10.0.x.x, our switches", **login}, **base)
+    ok &= check("a range that isn't one -> said so", r.status_code == 400
+                and r.json["problems"] == ["'our' isn't an address range. Use something like 10.0.0.0/16 or 10.0.x.x."],
+                r.json)
+    r = client.post("/api/network/run", json={"scope": "", "also_draw": "10.0.3.0/24, 10.0.5.x", **login}, **base)
     ok &= check("run starts", r.status_code == 200, r.json)
     started = time.time()
     while client.get("/api/network/job", **base).json["state"] == "running" and time.time() - started < 300:
@@ -307,15 +361,18 @@ def full_run():
                 and by["CORE-1"]["layer"] == "core" and by["B127-4507"]["layer"] == "access"
                 and by["C4-IDF"]["layer"] == "access" and data["summary"]["read"] == 21
                 and data["summary"]["listed"] == 22, data["summary"])
-    ok &= check("nothing off the list on the page", not any(x in names for x in ("INET-RTR-1", "WLC-1", "LAB-SW-TEMP"))
-                if (names := {n["name"] for n in data["nodes"]}) else False)
+    names = {n["name"] for n in data["nodes"]}
+    ok &= check("the switches in the ranges you gave are drawn too; nothing else off the list",
+                {"C5-IDF-2", "E9-IDF"} <= names and not names & {"INET-RTR-1", "WLC-1", "LAB-SW-TEMP"}
+                and data["summary"]["extra"] == 2 and data["ranges"] == "10.0.3.0/24, 10.0.5.0/24", data["summary"])
     names = {n["id"]: n["name"] for n in data["nodes"]}
     pairs = {(names[l["a"]], names[l["b"]]) if names[l["a"]] < names[l["b"]] else (names[l["b"]], names[l["a"]]): l
              for l in data["links"]}
     ok &= check("links between the switches on the list, the Aruba by LLDP, the Dell by MAC",
                 ("CORE-1", "CORE-2") in pairs and ("C4-IDF", "CORE-1") in pairs
-                and pairs[("B2-IDF", "CORE-1")]["mac"] and len(pairs) == 34, sorted(pairs))
-    # (34, not 35: the pretend switches answer on 127.0.0.1, so CDP's 10.2.1.15 for the switch that refused the
+                and pairs[("B2-IDF", "CORE-1")]["mac"] and ("C5-IDF", "C5-IDF-2") in pairs
+                and len(pairs) == 37, sorted(pairs))
+    # (37, not 38: the pretend switches answer on 127.0.0.1, so CDP's 10.0.2.15 for the switch that refused the
     # login can't be matched to the list here; on a real network the addresses match, as demo_map checks)
     ok &= check("no passwords in the page", b"sw-pass" not in page.data and b"core-pass" not in page.data)
 

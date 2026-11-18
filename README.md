@@ -145,7 +145,7 @@ The CSVs are saved in `data\docs\<date-time>\`, and earlier runs stay listed on 
 
 ## Network map
 
-Click **Network map** at the top of the page to see **which of your switches connect to which**. Each switch on your switch list is logged into once (several at a time) and asked who it's plugged into, using CDP and LLDP. **Only switches on your list are drawn**: routers, phones, access points, wireless controllers and anything else a switch sees are left out.
+Click **Network map** at the top of the page to see **which of your switches connect to which**. Each switch on your switch list is logged into once (several at a time) and asked who it's plugged into, using CDP and LLDP. **Only switches are drawn**: the ones on your list, plus any other switch they see whose address is in **Also draw switches found in** (`10.0.0.0/16` to start with; `10.0.x.x` works too, and several ranges can be separated with commas). Those extra switches are drawn with a **dashed outline** and say "not on your list": they aren't logged into, so you only see their links to your switches. Routers, phones, access points, wireless controllers and switches outside the range are left out. Empty the range to draw only your list.
 
 **Drawing one:** pick which switches (all of them, or one building), enter the login like on the main page, and click **Draw the map**. The map opens in a new tab and is saved in `data\network\pages\`, so earlier maps stay listed. Passwords are used for that run only and never saved. **See a made-up campus** shows what a map looks like without logging in anywhere.
 
@@ -154,14 +154,16 @@ Click **Network map** at the top of the page to see **which of your switches con
 **Finding your way around a big map:**
 - **Building**: one building, with the core switches it's plugged into.
 - **Find**: type a name, address or model to highlight it; press **Enter** (or pick a name from the list) to show only that switch and what it's plugged into. **Show everything** goes back.
-- **Show Core / Access**: hide a whole layer, for example access, to see just the core.
+- **Show Core / Access**: hide a whole layer, for example access, to see just the core. **Not on your list** hides or shows the dashed switches.
 - **Collapse closets**: each building's closets become one box ("10 closet switches"); click a box to open it and **▴ Collapse** to close it again. It starts on when there are more than 30 closet switches.
 - **Hover** a switch to light up its links and see its ports; hover a line for the ports at each end. **Click** a switch for its details, every link (port here, the switch it goes to, their port), **Show only this and its links** and **Draw this stack** (Cisco Catalyst and Dell switches).
 - **Fit**, **+** and **-** zoom; **Print / Save PDF** prints what's on screen on one landscape page.
 
 **How the links are found:** each link is usually reported by both ends and is drawn once; a thick line with ×2 means two or more links between the same switches. Dell and Aruba switches only speak LLDP, and a Cisco only sees them if it runs LLDP (`lldp run`). A switch on your list that nothing reports is looked for by its MAC address in the other switches' MAC tables (and, on Cisco, the ARP table) and drawn with a **dashed line** to the port it was found on.
 
-**Notes at the top of the map** tell you about anything to check: a switch that refused the login (still drawn where its neighbours say it is, with a red **!**), a switch on your list that isn't linked to anything, and any neighbour that **calls itself a switch but isn't on your list**. That last one is named so you can add it to the switch list if it's really yours; it isn't drawn.
+**Notes at the top of the map** tell you about anything to check: a switch that refused the login (still drawn where its neighbours say it is, with a red **!**), a switch on your list that isn't linked to anything, the switches drawn dashed, and any neighbour that **calls itself a switch but is outside the range**. That last one is named so you can add it to the switch list if it's really yours; it isn't drawn. A dashed switch is put in the building of the closet it's plugged into; one plugged straight into the core goes in a "Not on your list" group at the end.
+
+Mapping just one building still draws the core switches it's plugged into, as yours, from the switch list.
 
 ## How it knows when a port was last used
 
@@ -221,7 +223,7 @@ analyzer.py         reading each switch type's ports, deciding Inactive/Unsure/A
 switches.py         logging in over SSH/telnet for each switch type
 report.py           the Excel report
 portdocs.py         Port documentation: every port of every switch, with MAC addresses, as CSVs
-network.py          Network map: CDP/LLDP from the switches on the list, only listed switches drawn, Nexus = core
+network.py          Network map: CDP/LLDP from the switches on the list, plus unlisted switches in an address range, Nexus = core
 network_demo.py     the made-up campus (switch outputs) for the sample map and the tests
 topology.py         Stack topology: reading a Cisco or Dell stack, deciding each port, PoE and error checks, the cable test, Cisco/Dell config translation, the saved page
 topology_demo.py    made-up Cisco and Dell stacks for the example pages and the tests
