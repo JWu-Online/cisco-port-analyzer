@@ -6,6 +6,7 @@
   <title>Stack topology - Port Analyzer</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Crect x='6' y='12' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='13' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='20' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='6' y='19' width='5' height='4' fill='%234A5662'/%3E%3Crect x='13' y='19' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='20' y='19' width='5' height='4' fill='%23D9822B'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/picker.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -94,21 +95,24 @@
       }
     }
 
-    function syncManual() { $("#manual").hidden = $("#stack").value !== "__other"; }
+    function syncManual() {
+      var sel = $("#stack"), other = sel.value === "__other", typed = sel._picker ? sel._picker.typed : "";
+      $("#manual").hidden = !other;
+      if (other && /^[0-9a-f.:]+$/i.test(typed) && !$("#address").value) $("#address").value = typed;   // the address you typed
+    }
 
     async function init() {
       var state = (await api("/api/state")).data;
       var KIND = { cisco_ios: "Cisco", dell_powerconnect: "Dell" };
       var cisco = (state.switches || []).filter(function (s) { return KIND[s.type]; });
       var sel = $("#stack");
-      cisco.sort(function (a, b) {
-        return (a.building + a.location + a.address).localeCompare(b.building + b.location + b.address, undefined, { numeric: true });
-      }).forEach(function (s) {
-        var where = [s.building, s.location].filter(Boolean).join(", ");
-        sel.appendChild(el("option", { value: s.address },
-          (where ? where + " (" + s.address + ")" : s.address) + " · " + KIND[s.type]));
+      SwitchPicker.attach(sel);                  // type a name or address to find the stack (static/picker.js)
+      SwitchPicker.sortSwitches(cisco).forEach(function (s) {
+        sel.appendChild(SwitchPicker.option(s, s.address, KIND[s.type]));
       });
-      sel.appendChild(el("option", { value: "__other" }, "Another address…"));
+      var other = el("option", { value: "__other" }, "Another address…");
+      other.setAttribute("data-always", "");     // offered whatever is typed, so an address not on the list can be used
+      sel.appendChild(other);
       var asked = new URLSearchParams(location.search).get("address");   // from the Network map's "Draw this stack"
       var last = asked || recall("topologyStack");
       sel.value = last && Array.prototype.some.call(sel.options, function (o) { return o.value === last; }) ? last : sel.options[0].value;

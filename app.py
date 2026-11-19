@@ -37,7 +37,7 @@ DOCS_DIR = DATA_DIR / "docs"
 NETWORK_DIR = DATA_DIR / "network"
 
 DEFAULT_SETTINGS = {"months": 6, "default_protocol": "telnet", "parallel": 10, "timeout": 20}
-SWITCH_FIELDS = ["address", "type", "protocol", "building", "location"]
+SWITCH_FIELDS = ["address", "type", "protocol", "building", "location", "name"]
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
@@ -115,7 +115,8 @@ def clean_switch_rows(rows, default_protocol):
         seen.add(address.lower())
         out.append({"address": address, "type": vtype, "protocol": protocol,
                     "building": str(row.get("building", "")).strip(),
-                    "location": str(row.get("location", "")).strip()})
+                    "location": str(row.get("location", "")).strip(),
+                    "name": " ".join(str(row.get("name") or "").split())[:80]})
     return out, problems
 
 
@@ -137,7 +138,7 @@ def pick_switches(scope, all_switches):
     if scope.startswith("s:"):
         a = scope[2:]
         chosen = [s for s in all_switches if s["address"] == a]
-        where = chosen[0]["location"] if chosen else ""
+        where = (chosen[0].get("name") or chosen[0]["location"]) if chosen else ""
         return chosen, f"{where} ({a})" if where else a
     return all_switches, f"every switch ({len(all_switches)})"
 

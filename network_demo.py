@@ -124,7 +124,7 @@ def demo_results():
     results = []
     for n, (name, d) in enumerate(info.items(), start=1):
         switch = {"address": d["address"], "type": d["type"], "protocol": "telnet",
-                  "building": d["building"], "location": d["location"]}
+                  "building": d["building"], "location": d["location"], "name": name}
         if d["address"] in REFUSES_LOGIN:
             results.append({"switch": switch, "outputs": None,
                             "problem": "login failed (check the username and password)"})
@@ -177,4 +177,5 @@ def demo_results():
 
 
 def demo_switch_list():
-    return [{"address": s[0], "type": s[1], "protocol": "telnet", "building": s[2], "location": s[3]} for s in SWITCHES]
+    return [{"address": s[0], "type": s[1], "protocol": "telnet", "building": s[2], "location": s[3], "name": s[4]}
+            for s in SWITCHES]

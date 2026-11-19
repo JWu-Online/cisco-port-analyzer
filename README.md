@@ -35,15 +35,19 @@ If you used the old version, you no longer need to set up the `venv` folder your
 ### 1. Add your switches (first time only)
 Open **Switch list → Edit switches** and click **Import a file**. Pick a CSV with a header row like this (columns in any order):
 ```
-address,type,protocol,building,location
-10.99.0.1,cisco_nxos,ssh,M Building,Main MDF
-10.99.4.11,cisco_ios,telnet,C Building,C3 IDF
-10.99.4.12,aruba_mas,telnet,M Building,M2 IDF
-10.99.4.13,dell_powerconnect,telnet,B Building,B2 IDF
+address,type,protocol,building,location,name
+10.99.0.1,cisco_nxos,ssh,M Building,Main MDF,CORE-1
+10.99.4.11,cisco_ios,telnet,C Building,C3 IDF,C3-IDF
+10.99.4.12,aruba_mas,telnet,M Building,M2 IDF,M2-IDF
+10.99.4.13,dell_powerconnect,telnet,B Building,B2 IDF,B2-IDF
 ```
-This is the same format as Switch Port Finder, so the list you already use there works here too. Click **Save switches**.
+This is the same format as Switch Port Finder, so the list you already use there works here too (the `name` column is optional; a column called `hostname` or `device name` works as well). Click **Save switches**.
 
-You can also **Paste a list** (`address, type, ssh or telnet, location, building`) or **Add a switch** by hand. For the type you can write the model, like `2960x`, `N7k`, `5548P` or `S3500`. Use **Test login** on a row to check its type and login: it reads the switch's ports and tells you how many look unused.
+You can also **Paste a list** (`address, type, ssh or telnet, location, building, name`) or **Add a switch** by hand.
+
+**Names:** the **Name** column is yours, to keep a big list organized; type whatever you call the switch (usually its hostname). Reports still use the name the switch itself gives when it's logged into; your name is used when a switch can't be read, and the Network map also uses it to recognise a switch by name. **Find by name, address, building…** above the list narrows it to the rows that match every word you type.
+
+**Picking a switch fast:** everywhere you choose switches (Port Analyzer, Stack topology, Port documentation, Network map, and the Switch filter on the results), click the **Switches** box and start typing part of a name, an address, a building or a location, like `b3`, `10.0.2` or `c bldg 9300`. The list shrinks as you type; pick with the mouse, or the arrow keys and **Enter**. **Esc** puts it back the way it was. For the type you can write the model, like `2960x`, `N7k`, `5548P` or `S3500`. Use **Test login** on a row to check its type and login: it reads the switch's ports and tells you how many look unused.
 
 | Type | Use it for |
 |---|---|
@@ -53,7 +57,7 @@ You can also **Paste a list** (`address, type, ssh or telnet, location, building
 | `aruba_mas` | Aruba Mobility Access Switches (ArubaOS): S1500, S2500, S3500 |
 
 ### 2. Pick what to check
-- **Switches:** every switch, one building, or one switch.
+- **Switches:** every switch, one building, or one switch. Type part of its name or address to find it.
 - **Unused for at least:** how many months counts as unused (6 by default).
 
 ### 3. Log in and run
@@ -82,7 +86,7 @@ Click a switch to see only its ports. The table below starts on **Inactive** por
 
 Click **Stack topology** at the top of the page to draw one **Cisco Catalyst** or **Dell PowerConnect 5500** (5524, 5548, 5548P) stack. A chassis such as a Catalyst 4506/4507 is drawn slot by slot, each line card as its own panel. Every member is drawn as its own front panel with ports 1–48, and each port shows its VLAN. Color the ports by **Use** (green in use, empty socket unused, amber can't tell) or by **VLAN**. The stack cables between members are drawn on the left, and you get a warning if the stack ring is broken.
 
-1. Pick a Cisco or Dell switch from your switch list, or choose **Another address…** and type one (and pick its type).
+1. Pick a Cisco or Dell switch from your switch list (type part of its name or address to find it), or choose **Another address…** and type one (and pick its type). Typing an address that isn't on the list and pressing **Enter** picks **Another address…** with it filled in.
 2. Enter your login and click **Draw stack**.
 
 Hover over a port for its description, VLAN number and name (from `show vlan brief`), status and why it got its result. Switch to **Table** for a sortable list, or click **Download CSV**.
