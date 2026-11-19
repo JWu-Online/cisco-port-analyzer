@@ -104,29 +104,10 @@ function switchesInScope() {
   return saved;
 }
 
-function switchLabel(s) { return s.location ? `${s.location} (${s.address})` : s.address; }
-
 function renderScope() {
-  const saved = savedSwitches();
-  const buildings = buildingsInUse();
-  const valid = state.scope === "" ||
-    (state.scope.startsWith("b:") && buildings.some(([b]) => b === state.scope.slice(2))) ||
-    (state.scope.startsWith("s:") && saved.some(s => s.address === state.scope.slice(2)));
-  if (!valid) state.scope = "";
-  const groups = [h("option", { value: "", text: `Every switch (${saved.length})` })];
-  if (buildings.length) {
-    groups.push(h("optgroup", { label: "One building" },
-      buildings.map(([b, n]) => h("option", { value: `b:${b}`, text: `${b} (${n})` }))));
-  }
-  if (saved.length) {
-    const sorted = [...saved].sort((a, b) => natural(a.building, b.building) || natural(a.location, b.location)
-      || natural(a.address, b.address));
-    groups.push(h("optgroup", { label: "One switch" },
-      sorted.map(s => h("option", { value: `s:${s.address}`,
-        text: (s.building ? `${s.building}: ` : "") + switchLabel(s) }))));
-  }
-  $("#scope").replaceChildren(...groups);
-  $("#scope").value = state.scope;
+  // Every switch, one building or one switch; type a name or address to find one (static/picker.js)
+  SwitchPicker.fillScope($("#scope"), savedSwitches(), { types: state.types, value: state.scope });
+  state.scope = $("#scope").value;
   refreshScopeHint();
 }
 
@@ -182,7 +163,8 @@ function markDirty(dirty = true) {
 function switchMatches(s) {
   const q = state.switchFind.trim().toLowerCase();
   if (!q || !s.address) return true;
-  return [s.address, s.type, state.types[s.type], s.protocol, s.building, s.location].join(" ").toLowerCase().includes(q);
+  const text = [s.name, s.address, s.type, state.types[s.type], s.protocol, s.building, s.location].join(" ").toLowerCase();
+  return q.split(/\s+/).every(word => text.includes(word));
 }
 
 function renderSwitchRows() {
@@ -191,9 +173,11 @@ function renderSwitchRows() {
   state.switches.forEach((s, i) => {
     if (!switchMatches(s)) return;
     shown++;
-    const testCell = h("td", { colspan: "6", class: "test-result" });
+    const testCell = h("td", { colspan: "7", class: "test-result" });
     const testRow = h("tr", { class: "test-row", hidden: true }, testCell);
     rows.push(h("tr", {},
+      h("td", {}, h("input", { value: s.name || "", placeholder: "B3-IDF", "aria-label": "Switch name",
+        oninput: e => { s.name = e.target.value.trim(); markDirty(); } })),
       h("td", {}, h("input", { class: "mono", value: s.address, placeholder: "10.99.4.11", "aria-label": "Switch address",
         oninput: e => { s.address = e.target.value.trim(); markDirty(); } })),
       h("td", {}, h("select", { "aria-label": "Switch type",
@@ -207,7 +191,7 @@ function renderSwitchRows() {
         oninput: e => { s.location = e.target.value; markDirty(); } })),
       h("td", { class: "row-actions" },
         h("button", { class: "btn small", text: "Test login", onclick: () => testSwitch(s, testRow, testCell) }),
-        h("button", { class: "btn small quiet", text: "Remove", "aria-label": `Remove ${s.address || "this switch"}`,
+        h("button", { class: "btn small quiet", text: "Remove", "aria-label": `Remove ${s.name || s.address || "this switch"}`,
           onclick: () => { state.switches.splice(i, 1); markDirty(); renderSwitchRows(); } })),
     ), testRow);
   });
@@ -218,7 +202,7 @@ function renderSwitchRows() {
 
 function addSwitch(s) {
   state.switches.push({
-    address: s?.address || "", type: s?.type || "",
+    name: s?.name || "", address: s?.address || "", type: s?.type || "",
     protocol: s?.protocol || state.settings.default_protocol || "telnet",
     building: s?.building || "", location: s?.location || "",
   });
@@ -241,11 +225,11 @@ function csvSplit(line) {
   return out.map(s => s.trim());
 }
 
-// CSV/TSV with a header row (any column order), or "address, type, ssh or telnet, location, building"
+// CSV/TSV with a header row (any column order), or "address, type, ssh or telnet, location, building, name"
 function parseSwitchText(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   const split = line => (line.includes("\t") ? line.split("\t").map(s => s.trim()) : csvSplit(line));
-  let cols = { address: 0, type: 1, protocol: 2, location: 3, building: 4 };
+  let cols = { address: 0, type: 1, protocol: 2, location: 3, building: 4, name: 5 };
   let start = 0;
   if (lines.length) {
     const head = split(lines[0]).map(c => c.toLowerCase());
@@ -258,6 +242,7 @@ function parseSwitchText(text) {
         else if (/protocol|connect|method/.test(c)) cols.protocol ??= n;
         else if (/building|bldg|group/.test(c)) cols.building ??= n;
         else if (/location|closet|idf|room/.test(c)) cols.location ??= n;
+        else if ((/name|host/.test(c) && !/\bip\b|addr/.test(c)) || /^(device|switch)$/.test(c)) cols.name ??= n;
       });
       start = 1;
     }
@@ -274,7 +259,7 @@ function parseSwitchText(text) {
     if (rawType && !type) unknown++;
     const proto = get("protocol").toLowerCase();
     list.push({ address, type, protocol: proto === "ssh" || proto === "telnet" ? proto : undefined,
-      location: get("location"), building: get("building") });
+      location: get("location"), building: get("building"), name: get("name") });
   }
   return { list, unknown };
 }
@@ -337,7 +322,7 @@ async function saveSwitches() {
 async function testSwitch(s, row, cell) {
   row.hidden = false;
   cell.className = "test-result";
-  cell.textContent = `Logging into ${s.address} and reading its ports…`;
+  cell.textContent = `Logging into ${s.name || s.address} and reading its ports…`;
   const { ok, data } = await api("/api/test-switch", { switch: s, ...loginPayload() });
   cell.className = "test-result " + (ok && !data.problem ? "ok" : "error");
   if (!ok) { cell.textContent = `Couldn't check it: ${data.message || (data.problems || []).join(" ")}`; return; }
@@ -502,7 +487,11 @@ function renderResults() {
   const sws = [...r.switches].filter(s => s.ports).sort((a, b) => natural(a.name, b.name));
   if (f.switch && !sws.some(s => s.address === f.switch)) f.switch = "";
   $("#switchFilter").replaceChildren(h("option", { value: "", text: "All switches" }),
-    ...sws.map(s => h("option", { value: s.address, text: `${s.name} (${s.inactive} inactive)`, selected: s.address === f.switch })));
+    ...sws.map(s => h("option", { value: s.address, text: `${s.name} (${s.inactive} inactive)`, selected: s.address === f.switch,
+      "data-primary": s.name,
+      "data-secondary": [s.address !== s.name ? s.address : "", s.location, s.building, `${s.inactive} inactive`]
+        .filter(Boolean).join(" · "),
+      "data-search": [s.name, s.address, s.location, s.building].join(" ").toLowerCase() })));
   const blds = [...new Set(r.switches.map(s => s.building).filter(Boolean))].sort(natural);
   if (f.building && !blds.includes(f.building)) f.building = "";
   $("#buildingFilter").replaceChildren(h("option", { value: "", text: "All buildings" }),
@@ -645,6 +634,8 @@ async function init() {
   state.types = data.types;
   state.models = data.models || {};
   state.scope = recall("scope") || "";
+  SwitchPicker.attach($("#scope"));
+  SwitchPicker.attach($("#switchFilter"), { placeholder: "All switches" });
 
   fillSettings();
   renderSwitchRows();

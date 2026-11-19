@@ -474,14 +474,14 @@ def classify(p, threshold_days, months):
 def check_switch(switch, login, months, timeout=20, debug_dir=None):
     """Log into one switch, read and classify its ports. Never raises."""
     threshold = months * DAYS_PER_MONTH
-    info = {"name": switch["address"], "address": switch["address"], "type": switch["type"],
+    info = {"name": switch.get("name") or switch["address"], "address": switch["address"], "type": switch["type"],
             "protocol": switch["protocol"], "building": switch.get("building", ""),
             "location": switch.get("location", ""), "uptime_days": None, "ports": [],
             "problem": "", "debug_file": ""}
     raw = {}
     try:
         with sw.connect(switch["address"], switch["type"], switch["protocol"], login, timeout) as conn:
-            info["name"] = sw.prompt_name(conn) or switch["address"]
+            info["name"] = sw.prompt_name(conn) or info["name"]
             ports, uptime, raw = READERS[switch["type"]](conn)
     except Exception as exc:
         info["problem"] = sw.friendly_error(exc)
@@ -641,7 +641,8 @@ def main():
         with open(args.list, newline="", encoding="utf-8-sig") as f:
             targets = [{"address": r["address"].strip(), "type": sw.clean_type(r.get("type")) or "cisco_ios",
                         "protocol": sw.clean_protocol(r.get("protocol")) or "telnet",
-                        "building": r.get("building", ""), "location": r.get("location", "")}
+                        "building": r.get("building", ""), "location": r.get("location", ""),
+                        "name": (r.get("name") or "").strip()}
                        for r in csv.DictReader(f) if r.get("address", "").strip()]
     elif args.host:
         vtype = sw.clean_type(args.type)

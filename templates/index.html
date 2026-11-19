@@ -73,25 +73,25 @@
       </div>
 
       <div id="switchEditor" hidden>
-        <p class="editor-intro">List every switch you want to check. The type tells the app which commands to send, and the building lets you check one building at a time. The same list works in Switch Port Finder, so you can import the file you already have.</p>
+        <p class="editor-intro">List every switch you want to check. The name is yours to keep the list organized (and it's searchable everywhere you pick a switch), the type tells the app which commands to send, and the building lets you check one building at a time. The same list works in Switch Port Finder, so you can import the file you already have.</p>
         <div class="actions">
           <label class="btn" for="switchFile">Import a file</label>
           <input type="file" id="switchFile" accept=".csv,.txt,.tsv" hidden>
           <button class="btn" id="toggleBulk" aria-expanded="false">Paste a list</button>
           <button class="btn" id="addSwitch">Add a switch</button>
-          <input id="switchFind" type="search" class="switch-find" placeholder="Find a switch" aria-label="Find a switch in the list">
+          <input id="switchFind" type="search" class="switch-find" placeholder="Find by name, address, building…" aria-label="Find a switch in the list">
         </div>
         <div class="bulk" id="bulkBox" hidden>
           <label class="field">
-            <span>One switch per line: address, type, ssh or telnet, location, building. A CSV with a header row works too.</span>
-            <textarea id="bulkText" rows="6" class="mono" spellcheck="false" placeholder="10.99.0.1, cisco_nxos, ssh, Main MDF, M Building&#10;10.99.4.11, cisco_ios, telnet, C3 IDF, C Building&#10;10.99.4.12, S3500, telnet, M2 IDF, M Building&#10;10.99.4.13, 5548P, telnet, B2 IDF, B Building"></textarea>
+            <span>One switch per line: address, type, ssh or telnet, location, building, name. A CSV with a header row works too.</span>
+            <textarea id="bulkText" rows="6" class="mono" spellcheck="false" placeholder="10.99.0.1, cisco_nxos, ssh, Main MDF, M Building, CORE-1&#10;10.99.4.11, cisco_ios, telnet, C3 IDF, C Building, C3-IDF&#10;10.99.4.12, S3500, telnet, M2 IDF, M Building, M2-IDF&#10;10.99.4.13, 5548P, telnet, B2 IDF, B Building, B2-IDF"></textarea>
           </label>
           <div class="actions"><button class="btn" id="addBulk">Add these to the list</button></div>
         </div>
         <div class="notice" id="switchNotes" hidden></div>
         <div class="table-wrap switch-wrap">
           <table class="switch-table">
-            <thead><tr><th>Address</th><th>Type</th><th>Connect with</th><th>Building</th><th>Location</th><th><span class="sr">Actions</span></th></tr></thead>
+            <thead><tr><th>Name</th><th>Address</th><th>Type</th><th>Connect with</th><th>Building</th><th>Location</th><th><span class="sr">Actions</span></th></tr></thead>
             <tbody id="switchRows"></tbody>
           </table>
         </div>
@@ -159,6 +159,7 @@
     </section>
   </main>
 
+  <script src="/static/picker.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

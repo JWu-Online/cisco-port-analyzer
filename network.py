@@ -361,17 +361,19 @@ def build_map(results, overrides=None, scope="", now=None, also_draw=None, whole
         outputs = res.get("outputs") or {}
         ident = switch_identity(outputs, s["type"]) if outputs else {"hostname": "", "model": "", "macs": set()}
         node_id = s["address"]
-        node = nodes[node_id] = _node(node_id, ident["hostname"] or s["address"], s["address"], ident["model"],
-                                      s.get("building", ""), s.get("location", ""), s["type"], True, True)
+        node = nodes[node_id] = _node(node_id, ident["hostname"] or s.get("name") or s["address"], s["address"],
+                                      ident["model"], s.get("building", ""), s.get("location", ""), s["type"], True, True)
         node.update(read=bool(outputs), problem=res.get("problem", ""), _macs=ident["macs"])
         by_ip[s["address"]] = node_id
-        if ident["hostname"]:
-            by_name[ident["hostname"].lower()] = node_id
+        for name in (ident["hostname"], s.get("name")):     # what it calls itself, and its name on the list
+            if name:
+                by_name.setdefault(name.lower(), node_id)
         for mac in ident["macs"]:
             by_mac[mac] = node_id
 
     left_out = {}                                           # neighbors not on the list: name -> platform
     not_read = {s["address"]: s for s in (whole_list or []) if s["address"] not in nodes}
+    not_read_names = {s["name"].lower(): s for s in not_read.values() if s.get("name")}
     reported = []                                           # (switch that reported it, neighbor)
     for res in results:
         if res.get("outputs"):
@@ -383,22 +385,24 @@ def build_map(results, overrides=None, scope="", now=None, also_draw=None, whole
 
     # Switches the ones on the list see that get drawn too: on the list but not read this time, or in the range
     for _, nb in sorted(reported, key=lambda r: not r[1]["ip"]):         # the ones that give an address first
-        if not nb["ip"] or nb["ip"] in by_ip or (nb["name"] and nb["name"].lower() in by_name) \
+        if (nb["ip"] and nb["ip"] in by_ip) or (nb["name"] and nb["name"].lower() in by_name) \
                 or (chassis_mac(nb) and chassis_mac(nb) in by_mac):
             continue
         model = re.sub(r"(?i)^cisco\s+", "", nb["platform"])
-        s = not_read.get(nb["ip"])
-        if s:
-            node = _node(nb["ip"], nb["name"] or nb["ip"], nb["ip"], model, s.get("building", ""),
-                         s.get("location", ""), s["type"], True)
-        elif is_switch(nb) and in_ranges(nb["ip"], also_draw):
+        s = not_read.get(nb["ip"]) or (not_read_names.get(nb["name"].lower()) if nb["name"] else None)
+        if s:                                              # on the list, by its address or its name there
+            node = _node(s["address"], s.get("name") or nb["name"] or s["address"], s["address"], model,
+                         s.get("building", ""), s.get("location", ""), s["type"], True)
+        elif nb["ip"] and is_switch(nb) and in_ranges(nb["ip"], also_draw):
             node = _node(nb["ip"], nb["name"] or nb["ip"], nb["ip"], model)
         else:
             continue
         nodes[node["id"]] = node
-        by_ip[nb["ip"]] = node["id"]
-        if nb["name"]:
-            by_name[nb["name"].lower()] = node["id"]
+        for ip in {nb["ip"], node["address"]} - {""}:
+            by_ip[ip] = node["id"]
+        for name in (nb["name"], s.get("name") if s else ""):
+            if name:
+                by_name.setdefault(name.lower(), node["id"])
         if chassis_mac(nb):
             by_mac[chassis_mac(nb)] = node["id"]
 

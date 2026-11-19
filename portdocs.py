@@ -196,7 +196,7 @@ def rows_from_check(info, raw, switch, now=None):
 def document_switch(switch, login, months, timeout=20, history_dir=None, debug_dir=None, now=None):
     """Log into one switch and return {"name", "rows", "problem", "macs"}. Never raises."""
     vendor = switch["type"]
-    out = {"name": switch["address"], "rows": [], "problem": "", "macs": 0}
+    out = {"name": switch.get("name") or switch["address"], "rows": [], "problem": "", "macs": 0}
     try:
         if vendor in topology.VENDORS:
             outputs = topology.collect_outputs(switch["address"], switch["protocol"], login, timeout,
@@ -207,14 +207,14 @@ def document_switch(switch, login, months, timeout=20, history_dir=None, debug_d
                                                  vendor=vendor)
             if history_dir and data["summary"]["total"]:
                 topology.save_history(history_dir, switch["address"], history)
-            out["name"] = data["hostname"] or switch["address"]
+            out["name"] = data["hostname"] or out["name"]
             rows, mac_output = rows_from_stack(data, switch), outputs.get("macs", "")
             if not rows and debug_dir:
                 topology.save_debug(debug_dir, switch["address"], vendor, outputs)
         else:
-            info = {"name": switch["address"], "ports": []}
+            info = {"name": out["name"], "ports": []}
             with sw.connect(switch["address"], vendor, switch["protocol"], login, timeout) as conn:
-                info["name"] = sw.prompt_name(conn) or switch["address"]
+                info["name"] = sw.prompt_name(conn) or out["name"]
                 ports, uptime, raw = analyzer.READERS[vendor](conn)
                 if vendor == "cisco_nxos":
                     _, raw["show vlan brief"] = sw.run_first_working(conn, ["show vlan brief"])

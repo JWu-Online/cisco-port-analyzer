@@ -6,6 +6,7 @@
   <title>Port documentation - Port Analyzer</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Crect x='6' y='12' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='13' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='20' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='6' y='19' width='5' height='4' fill='%234A5662'/%3E%3Crect x='13' y='19' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='20' y='19' width='5' height='4' fill='%23D9822B'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/picker.js"></script>
   <style>
     .runs { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
     .runs > li { border: 1px solid var(--line-soft); border-radius: 6px; padding: 10px 14px; display: grid; gap: 6px; }
@@ -105,7 +106,6 @@
       if (text !== undefined) e.textContent = text;
       return e;
     }
-    function natural(a, b) { return String(a || "").localeCompare(String(b || ""), undefined, { numeric: true }); }
     function plural(n, one, many) { return n + " " + (n === 1 ? one : many); }
     function notice(kind, messages) {
       var box = $("#notes");
@@ -133,30 +133,8 @@
       if (scope.indexOf("s:") === 0) return state.switches.filter(function (s) { return s.address === scope.slice(2); });
       return state.switches;
     }
-    function renderScope() {
-      var sel = $("#scope"), saved = state.switches;
-      sel.textContent = "";
-      sel.appendChild(el("option", { value: "" }, "Every switch (" + saved.length + ")"));
-      var counts = {};
-      saved.forEach(function (s) { if (s.building) counts[s.building] = (counts[s.building] || 0) + 1; });
-      var buildings = Object.keys(counts).sort(natural);
-      if (buildings.length) {
-        var g = el("optgroup", { label: "One building" });
-        buildings.forEach(function (b) { g.appendChild(el("option", { value: "b:" + b }, b + " (" + counts[b] + ")")); });
-        sel.appendChild(g);
-      }
-      if (saved.length) {
-        var g2 = el("optgroup", { label: "One switch" });
-        saved.slice().sort(function (a, b) {
-          return natural(a.building, b.building) || natural(a.location, b.location) || natural(a.address, b.address);
-        }).forEach(function (s) {
-          g2.appendChild(el("option", { value: "s:" + s.address },
-            (s.building ? s.building + ": " : "") + (s.location ? s.location + " (" + s.address + ")" : s.address)));
-        });
-        sel.appendChild(g2);
-      }
-      var last = recall("docsScope") || "";
-      sel.value = Array.prototype.some.call(sel.options, function (o) { return o.value === last; }) ? last : "";
+    function renderScope() {          // type a name or address to find a switch (static/picker.js)
+      SwitchPicker.fillScope($("#scope"), state.switches, { types: state.types, value: recall("docsScope") || "" });
       hint();
     }
     function hint() {
@@ -255,11 +233,13 @@
     async function init() {
       var data = (await api("/api/state")).data;
       state.switches = data.switches || [];
+      state.types = data.types || {};
       $("#months").value = (data.settings && data.settings.months) || 6;
       $("#user").value = recall("user") || "";
       $("#sshUser").value = recall("sshUser") || "";
       $("#sshDifferent").checked = recall("sshDifferent") === "1";
       $("#sshLogin").hidden = !$("#sshDifferent").checked;
+      SwitchPicker.attach($("#scope"));
       renderScope();
       await loadRuns();
       var job = (await api("/api/docs/job?since=0")).data;

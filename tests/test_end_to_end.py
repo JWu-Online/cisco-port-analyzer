@@ -66,8 +66,10 @@ def main():
         {"address": addr["ios"], "type": "2960x", "protocol": "telnet", "building": "C Building", "location": "C4 IDF"},
         {"address": addr["nxos"], "type": "N7k", "protocol": "ssh", "building": "M Building", "location": "Main MDF"},
         {"address": addr["dell"], "type": "5548P", "protocol": "telnet", "building": "B Building", "location": "B2 IDF"},
-        {"address": addr["aruba"], "type": "S3500", "protocol": "telnet", "building": "M Building", "location": "M2 IDF"},
-        {"address": addr["bad"], "type": "cisco_ios", "protocol": "telnet", "building": "B Building", "location": "B3 IDF"},
+        {"address": addr["aruba"], "type": "S3500", "protocol": "telnet", "building": "M Building", "location": "M2 IDF",
+         "name": "M2 Aruba"},
+        {"address": addr["bad"], "type": "cisco_ios", "protocol": "telnet", "building": "B Building", "location": "B3 IDF",
+         "name": "  B-IDF3   SW3 "},
         {"address": addr["wrong"], "type": "dell_powerconnect", "protocol": "telnet", "building": "C Building",
          "location": "C9 IDF"},
     ]
@@ -75,8 +77,19 @@ def main():
     ok &= check("switch list saved, model names understood as types",
                 r.status_code == 200 and [s["type"] for s in r.json["switches"]] ==
                 ["cisco_ios", "cisco_nxos", "dell_powerconnect", "aruba_mas", "cisco_ios", "dell_powerconnect"], r.json)
+    ok &= check("names saved, tidied; a switch with no name is fine",
+                [s["name"] for s in r.json["switches"]] == ["", "", "", "M2 Aruba", "B-IDF3 SW3", ""]
+                and [s["name"] for s in client.get("/api/state", **base).json["switches"]][3:5] == ["M2 Aruba", "B-IDF3 SW3"])
     r = client.post("/api/switches", json={"switches": [{"address": "10.0.0.9", "type": "aruba_aoscx"}]}, **base)
     ok &= check("a type this app can't check is refused", r.status_code == 400)
+    saved_csv = webapp.SWITCHES_FILE.read_text(encoding="utf-8")
+    webapp.SWITCHES_FILE.write_text("address,type,protocol,building,location\n10.0.0.7,cisco_ios,telnet,B,B1\n",
+                                    encoding="utf-8")
+    ok &= check("a list saved before names existed still loads (no names)",
+                client.get("/api/state", **base).json["switches"] == [
+                    {"address": "10.0.0.7", "type": "cisco_ios", "protocol": "telnet", "building": "B",
+                     "location": "B1", "name": ""}])
+    webapp.SWITCHES_FILE.write_text(saved_csv, encoding="utf-8")
     r = client.post("/api/settings", json={"default_protocol": "telnet", "parallel": 6, "timeout": 10}, **base)
     ok &= check("settings saved", r.status_code == 200, r.json)
 
@@ -132,6 +145,8 @@ def main():
     ok &= check("wrong type: flagged and what it printed saved",
                 wrong["ports"] == 0 and "Is the type right" in wrong["problem"] and wrong["debug_file"]
                 and Path(wrong["debug_file"]).exists(), wrong)
+    ok &= check("a switch that couldn't be read goes by its name on the list", names[addr["bad"]]["name"] == "B-IDF3 SW3",
+                names[addr["bad"]])
     ok &= check("names come from the switch prompts", names[addr["aruba"]]["name"] == "S3500-M205"
                 and names[addr["nxos"]]["name"] == "LGCC-N7K")
     ok &= check("closet switch went into enable mode", ios_cli.enabled and dell_cli.enabled and aruba_cli.enabled)

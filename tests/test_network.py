@@ -274,6 +274,31 @@ def demo_map():
                 and one["summary"]["listed"] == 6 and one["summary"]["extra"] == 0
                 and not any("Drawn dashed" in w for w in one["warnings"]), [(n["name"], n["on_list"]) for n in cores])
 
+    renamed = ND.demo_results()
+    for r in renamed:
+        if r["switch"]["address"] == "10.0.2.15":           # the one that refuses the login, on another address
+            r["switch"].update(address="10.9.9.15", name="B4-IDF")
+    b4 = N.build_map(renamed, {}, "test", also_draw=nets)
+    b4_node = next(n for n in b4["nodes"] if n["address"] == "10.9.9.15")
+    ok &= check("a switch that can't be read is still found by its name on the list (its address there differs)",
+                b4_node["name"] == "B4-IDF" and b4_node["links"] == 1
+                and not any(n["address"] == "10.0.2.15" for n in b4["nodes"]), b4_node)
+    nameless = ND.demo_results()
+    for r in nameless:
+        r["switch"]["name"] = ""
+    ok &= check("with no names on the list, it still gets its name from its neighbor's CDP",
+                next(n for n in N.build_map(nameless, {}, "test")["nodes"] if n["address"] == "10.0.2.15")["name"]
+                == "B4-IDF")
+    lst = ND.demo_switch_list()
+    part = [r for r in ND.demo_results() if r["switch"]["building"] == "C Building"]
+    for row in lst:
+        if row["name"] == "CORE-1":
+            row["address"] = "10.0.0.100"                # listed under another address than CDP reports
+    c_only = N.build_map(part, {}, "C Building", also_draw=[], whole_list=lst)
+    core1 = next((n for n in c_only["nodes"] if n["name"] == "CORE-1"), None)
+    ok &= check("mapping one building: a core on the list under another address is matched by its name",
+                core1 and core1["on_list"] and core1["address"] == "10.0.0.100" and core1["layer"] == "core", core1)
+
     moved = N.build_map(ND.demo_results(), {"10.0.2.27": "distribution"}, "test", also_draw=nets)
     sw4507 = next(n for n in moved["nodes"] if n["name"] == "B127-4507")
     ok &= check("a layer you pick wins, and automatic is remembered",
@@ -371,9 +396,9 @@ def full_run():
     ok &= check("links between the switches on the list, the Aruba by LLDP, the Dell by MAC",
                 ("CORE-1", "CORE-2") in pairs and ("C4-IDF", "CORE-1") in pairs
                 and pairs[("B2-IDF", "CORE-1")]["mac"] and ("C5-IDF", "C5-IDF-2") in pairs
-                and len(pairs) == 37, sorted(pairs))
-    # (37, not 38: the pretend switches answer on 127.0.0.1, so CDP's 10.0.2.15 for the switch that refused the
-    # login can't be matched to the list here; on a real network the addresses match, as demo_map checks)
+                and len(pairs) == 38 and ("B4-IDF", "CORE-1") in pairs, sorted(pairs))
+    # (the pretend switches answer on 127.0.0.1, so CDP's 10.0.2.15 for the switch that refused the login doesn't
+    # match its address on the list; its name on the list does)
     ok &= check("no passwords in the page", b"sw-pass" not in page.data and b"core-pass" not in page.data)
 
     core1 = by["CORE-1"]["id"]
