@@ -24,7 +24,9 @@ os.environ.setdefault("PA_DATA_DIR", tempfile.mkdtemp(prefix="pa-docs-test-"))
 
 from mock_switch import MockCLI, SSHSwitch, TelnetSwitch  # noqa: E402
 import samples as S  # noqa: E402
+import analyzer as A  # noqa: E402
 import portdocs as P  # noqa: E402
+import switches as S_  # noqa: E402
 import topology as T  # noqa: E402
 from topology_demo import demo_outputs, dell_demo_outputs  # noqa: E402
 import app as webapp  # noqa: E402
@@ -102,6 +104,28 @@ def mac_tables():
     ok &= check("no MACs -> blank and 0", P.mac_columns("20", []) == ("", 0))
     ok &= check("trunks just say so, with no count", P.mac_columns("trunk", [("0011.2233.4401", "20")]) == ("Trunk port", "")
                 and P.mac_columns("routed", []) == ("Routed port", ""))
+    ok &= check("Status in the switch's words; up/down switches get the same words",
+                [P.status_word(p) for p in ({"status": "connected"}, {"status": "notconnect"}, {"status": "err-disabled"},
+                                            {"status": "disabled"}, {"status": "sfpAbsent"}, {"status": "up"},
+                                            {"status": "down"}, {"status": "up", "state": "connected"},
+                                            {"status": "down", "state": "err-disabled"})]
+                == ["connected", "notconnect", "err-disabled", "disabled", "sfpAbsent", "connected", "notconnect",
+                    "connected", "err-disabled"])
+    ok &= check("Nexus 'show interface' reasons -> the same words",
+                [A.nxos_state(u, r) for u, r in (("up", ""), ("down", "Link not connected"), ("down", "Administratively down"),
+                                                 ("down", "errDisabled"), ("down", "Error disabled"), ("down", "XCVR not inserted"),
+                                                 ("down", "SFP not inserted"), ("down", "Inactive"))]
+                == ["connected", "notconnect", "disabled", "err-disabled", "err-disabled", "xcvrAbsent", "sfpAbsent",
+                    "notconnect"])
+    ok &= check("SNMP location from the config, 'show snmp', a Dell's 'show system', or bare",
+                [S_.parse_location(t, b) for t, b in (("snmp-server location E Building 3rd floor\n", False),
+                                                      ('snmp-server location "B2 IDF"', False),
+                                                      ("sys contact: noc\nsys location: Main MDF", False),
+                                                      ("System Location:          B Building", False),
+                                                      ('syslocation "M2 closet"', False), ("Library 1st fl", True),
+                                                      ("%SNMP agent not enabled", True), ("", False),
+                                                      ("System Location:", False))]
+                == ["E Building 3rd floor", "B2 IDF", "Main MDF", "B Building", "M2 closet", "Library 1st fl", "", "", ""])
     text = P.csv_text([{"description": "=HYPERLINK(\"x\")", "vlan": "20", "tagged": "40 VOICE-PHONES"}])
     ok &= check("text Excel would run as a formula is made harmless", "'=HYPERLINK" in text, text)
     return ok
@@ -116,6 +140,7 @@ def pretend_switches():
         elif key in demo:
             cmds[cmd] = demo[key]
     cmds["show mac address-table dynamic"] = IOS_MACS
+    cmds["show running-config | include snmp-server location"] = "snmp-server location E Building 3rd floor E-310\n"
     ios_cli = MockCLI("DEMO-IDF-E3", cmds, start_enabled=False, enable_secret="en-secret")
     ddemo, dcmds = dell_demo_outputs(), {}
     for key, cmd in T.DELL_COMMANDS.items():
@@ -123,6 +148,8 @@ def pretend_switches():
     dcmds["show mac address-table dynamic"] = DELL_MACS
     dell_cli = MockCLI("DEMO-B2-DELL", dcmds, start_enabled=False, enable_secret="en-secret")
     nxos_cli = MockCLI("LGCC-N7K", {**S.OUTPUTS["cisco_nxos"], "show mac address-table dynamic": NXOS_MACS,
+                                    "show running-config snmp": "snmp-server contact noc\n"
+                                                                "snmp-server location M Building Main MDF\n",
                                     "show vlan brief": "VLAN Name                             Status    Ports\n"
                                                        "---- -------------------------------- --------- -------\n"
                                                        "1    default                          active    Eth1/2\n"
@@ -139,9 +166,10 @@ def pretend_switches():
     addr = {k: f"127.0.0.1:{s.port}" for k, s in servers.items()}
     clis = {"ios": ios_cli, "dell": dell_cli, "nxos": nxos_cli, "aruba": aruba_cli, "_servers": servers}
     return clis, addr, [
-        {"address": addr["ios"], "type": "cisco_ios", "protocol": "telnet", "building": "E Building", "location": "E3 IDF"},
+        {"address": addr["ios"], "type": "cisco_ios", "protocol": "telnet", "building": "E Building", "location": "E3 IDF",
+         "name": "E3-STACK"},
         {"address": addr["dell"], "type": "5548P", "protocol": "telnet", "building": "B Building", "location": "B2 IDF"},
-        {"address": addr["nxos"], "type": "N7k", "protocol": "ssh", "building": "M Building", "location": "Main MDF"},
+        {"address": addr["nxos"], "type": "N7k", "protocol": "ssh", "building": "M Building", "location": ""},
         {"address": addr["aruba"], "type": "S3500", "protocol": "telnet", "building": "M Building", "location": "M2 IDF"},
         {"address": addr["bad"], "type": "cisco_ios", "protocol": "telnet", "building": "B Building", "location": "B3 IDF"},
     ]
@@ -206,7 +234,26 @@ def full_run():
                 and gi1.get("Description") == "Rm E-310 Desk 2" and gi1.get("VLAN") == "20"
                 and gi1.get("VLAN name") == "STAFF-DATA" and gi1.get("Tagged VLANs") == "40 VOICE-PHONES"
                 and gi1.get("MAC addresses") == "0011.2233.4401, a4b1.c2d3.e401" and gi1.get("MAC count") == "2"
-                and gi1.get("Result") == "Active" and gi1.get("Status") == "Link up" and gi1.get("Speed") == "1000", gi1)
+                and gi1.get("Result") == "Active" and gi1.get("Status") == "connected" and gi1.get("Speed") == "1000", gi1)
+    statuses = {row["Status"] for row in rows}
+    ok &= check("Status column in the switches' own words", statuses ==
+                {"connected", "notconnect", "disabled", "err-disabled", "xcvrAbsent"}, statuses)
+    nx_status = {row["Interface"]: row["Status"] for row in rows if row["Switch"] == "LGCC-N7K"}
+    ok &= check("Nexus: up, no link, shut down, no transceiver", nx_status ==
+                {"Eth1/1": "connected", "Eth1/2": "notconnect", "Eth1/3": "disabled", "Eth1/4": "xcvrAbsent"}, nx_status)
+    locs = {row["Switch"]: (row["Location"], row["SNMP location"]) for row in rows}
+    ok &= check("SNMP location column from each switch; Location from the list, or the switch's when the list's is "
+                "empty", locs == {"DEMO-IDF-E3": ("E3 IDF", "E Building 3rd floor E-310"),
+                                  "DEMO-B2-DELL": ("B2 IDF", "B Building"),
+                                  "LGCC-N7K": ("M Building Main MDF", "M Building Main MDF"),
+                                  "S3500-M205": ("M2 IDF", "")}, locs)
+    saved = {s["address"]: (s["name"], s["location"]) for s in client.get("/api/state", **base).json["switches"]}
+    ok &= check("empty names and locations on the list filled in from the switches; typed ones left alone",
+                saved == {addr["ios"]: ("E3-STACK", "E3 IDF"), addr["dell"]: ("DEMO-B2-DELL", "B2 IDF"),
+                          addr["nxos"]: ("LGCC-N7K", "M Building Main MDF"), addr["aruba"]: ("S3500-M205", "M2 IDF"),
+                          addr["bad"]: ("", "B3 IDF")}, saved)
+    ok &= check("the log says what it filled in",
+                any("Filled in 3 names and 1 location on your switch list" in m for m in log), log)
     trunk = by.get(("DEMO-IDF-E3", "Gi1/0/28"), {})
     ok &= check("Cisco trunk: VLAN says Trunk, MAC column says Trunk port, its VLANs listed",
                 trunk.get("VLAN") == "Trunk" and trunk.get("MAC addresses") == "Trunk port" and trunk.get("MAC count") == ""

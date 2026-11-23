@@ -271,6 +271,21 @@ def read_cisco_nxos(conn):
 NXOS_HEAD = re.compile(r"^(Ethernet\S+) is (up|down)(?:\s*\((.+?)\))?")
 
 
+def nxos_state(updown, reason):
+    """'Ethernet1/5 is down (errDisabled)' -> the word 'show interface status' uses: connected, notconnect,
+    disabled, err-disabled, xcvrAbsent / sfpAbsent."""
+    reason = (reason or "").lower()
+    if updown == "up":
+        return "connected"
+    if "administratively" in reason:
+        return "disabled"
+    if "err" in reason and "disable" in reason:
+        return "err-disabled"
+    if "not inserted" in reason or "absent" in reason:
+        return "xcvrAbsent" if "xcvr" in reason else "sfpAbsent"
+    return "notconnect"
+
+
 def parse_nxos_interfaces(output, uptime):
     ports, cur = [], None
     for line in (output or "").splitlines():
@@ -280,6 +295,7 @@ def parse_nxos_interfaces(output, uptime):
             reason = (m.group(3) or "").lower()
             cur["status"] = "up" if m.group(2) == "up" else (
                 "disabled" if "administratively" in reason else "down")
+            cur["state"] = nxos_state(m.group(2), reason)
             ports.append(cur)
             continue
         if not line.startswith(" ") and line.strip() and not line.lower().startswith("admin state"):
@@ -289,7 +305,7 @@ def parse_nxos_interfaces(output, uptime):
             continue
         s = line.strip()
         if s.lower().startswith("admin state is down"):
-            cur["status"] = "disabled"
+            cur["status"] = cur["state"] = "disabled"
         elif s.startswith("Description:"):
             cur["description"] = s.split(":", 1)[1].strip()
         elif s.startswith("Last link flapped"):
@@ -477,15 +493,18 @@ def check_switch(switch, login, months, timeout=20, debug_dir=None):
     info = {"name": switch.get("name") or switch["address"], "address": switch["address"], "type": switch["type"],
             "protocol": switch["protocol"], "building": switch.get("building", ""),
             "location": switch.get("location", ""), "uptime_days": None, "ports": [],
-            "problem": "", "debug_file": ""}
+            "problem": "", "debug_file": "", "hostname": "", "snmp_location": ""}
     raw = {}
     try:
         with sw.connect(switch["address"], switch["type"], switch["protocol"], login, timeout) as conn:
-            info["name"] = sw.prompt_name(conn) or info["name"]
+            info["hostname"] = sw.prompt_name(conn)
+            info["name"] = info["hostname"] or info["name"]
             ports, uptime, raw = READERS[switch["type"]](conn)
+            info["snmp_location"] = sw.read_location(conn, switch["type"])
     except Exception as exc:
         info["problem"] = sw.friendly_error(exc)
         return info
+    info["location"] = info["location"] or info["snmp_location"]       # the switch's own, until the list has one
     info["uptime_days"] = round(uptime, 1) if uptime is not None else None
     for p in sorted(ports, key=lambda p: port_key(p["port"])):
         info["ports"].append(classify(p, threshold, months))
@@ -556,7 +575,7 @@ class Job:
                     "report_file": self.report_file.name if self.report_file else None}
 
 
-def run_job(job, switches, logins, months, settings, reports_dir, debug_dir, scope_label):
+def run_job(job, switches, logins, months, settings, reports_dir, debug_dir, scope_label, learn=None):
     """Check every switch in `switches`, then save a report. Updates `job` as it goes."""
     job.state = "running"
     try:
@@ -603,6 +622,7 @@ def run_job(job, switches, logins, months, settings, reports_dir, debug_dir, sco
         path = reports_dir / f"report-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
         path.write_text(json.dumps(report), encoding="utf-8")
         job.report_file = path
+        share_learned(job, learn, {i["address"]: {"name": i["hostname"], "location": i["snmp_location"]} for i in infos})
         total = Counter(r["result"] for r in report["ports"])
         failed = sum(1 for s in report["switches"] if s["problem"] and not s["ports"])
         job.log(f"Done. {total['INACTIVE']} inactive, {total['UNSURE']} unsure and {total['ACTIVE']} active "
@@ -612,6 +632,26 @@ def run_job(job, switches, logins, months, settings, reports_dir, debug_dir, sco
     except Exception as exc:
         job.state = "failed"
         job.log(f"The run stopped with an error: {sw.friendly_error(exc)}", "error")
+
+
+def share_learned(job, learn, found):
+    """Fill empty Name and Location fields on the switch list from what the switches said about themselves.
+
+    found: {address: {"name": its hostname, "location": its SNMP location}}. learn (from the web app) does the
+    filling and returns (names filled, locations filled); it never changes a field that has something in it."""
+    found = {a: v for a, v in found.items() if v.get("name") or v.get("location")}
+    if not learn or not found:
+        return
+    try:
+        names, places = learn(found)
+    except Exception as exc:
+        job.log(f"Couldn't fill in the switch list: {sw.friendly_error(exc)}", "warn")
+        return
+    bits = [f"{names} name{'' if names == 1 else 's'}" if names else "",
+            f"{places} location{'' if places == 1 else 's'}" if places else ""]
+    if names or places:
+        job.log("Filled in " + " and ".join(b for b in bits if b) + " on your switch list from the switches "
+                "themselves (only where the list was empty).")
 
 
 def _check_unless_stopped(job, switch, login, months, timeout, debug_dir):

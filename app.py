@@ -95,6 +95,30 @@ def save_switches(rows):
         writer.writerows(rows)
 
 
+switches_lock = threading.Lock()          # a run filling in names and you saving the list don't collide
+
+
+def learn_from_switches(found):
+    """{address: {"name": hostname, "location": SNMP location}} -> fill the switch list's EMPTY Name and Location
+    fields with them. Never changes one you typed. Returns (names filled, locations filled)."""
+    names = places = 0
+    with switches_lock:
+        rows = load_switches()
+        for r in rows:
+            seen = found.get(r["address"]) or {}
+            name = " ".join(str(seen.get("name") or "").split())[:80]
+            place = " ".join(str(seen.get("location") or "").split())[:120]
+            if name and not r["name"] and name != r["address"]:
+                r["name"] = name
+                names += 1
+            if place and not r["location"]:
+                r["location"] = place
+                places += 1
+        if names or places:
+            save_switches(rows)
+    return names, places
+
+
 def clean_switch_rows(rows, default_protocol):
     out, problems, seen = [], [], set()
     for n, row in enumerate(rows, 1):
@@ -179,7 +203,8 @@ def set_switches():
     rows, problems = clean_switch_rows(request.json.get("switches", []), load_settings()["default_protocol"])
     if problems:
         return jsonify({"ok": False, "problems": problems}), 400
-    save_switches(rows)
+    with switches_lock:
+        save_switches(rows)
     return jsonify({"ok": True, "switches": rows})
 
 
@@ -235,7 +260,7 @@ def run():
         job = analyzer.Job()
         threading.Thread(target=analyzer.run_job,
                          args=(job, chosen, logins, months, settings, REPORTS_DIR, DEBUG_DIR, label),
-                         daemon=True).start()
+                         kwargs={"learn": learn_from_switches}, daemon=True).start()
     return jsonify({"ok": True})
 
 
@@ -301,7 +326,7 @@ def test_switch():
     s = analyzer.summarize(info)
     return jsonify({"ok": True, "name": s["name"], "ports": s["ports"], "inactive": s["inactive"],
                     "unsure": s["unsure"], "uptime_days": s["uptime_days"], "problem": s["problem"],
-                    "seconds": seconds})
+                    "seconds": seconds, "hostname": info["hostname"], "snmp_location": info["snmp_location"]})
 
 
 # ---------------------------------------------------------------------------
@@ -444,7 +469,7 @@ def docs_run():
         threading.Thread(target=portdocs.run_job,
                          args=(docs_job, chosen, logins, months, load_settings(), DOCS_DIR, TOPOLOGY_DIR,
                                DEBUG_DIR, label),
-                         daemon=True).start()
+                         kwargs={"learn": learn_from_switches}, daemon=True).start()
     return jsonify({"ok": True})
 
 
@@ -514,7 +539,7 @@ def network_run():
         net_job = analyzer.Job()
         threading.Thread(target=network.run_job,
                          args=(net_job, chosen, logins, load_settings(), NETWORK_DIR, DEBUG_DIR, label),
-                         kwargs={"also_draw": also_draw, "whole_list": load_switches()},
+                         kwargs={"also_draw": also_draw, "whole_list": load_switches(), "learn": learn_from_switches},
                          daemon=True).start()
     return jsonify({"ok": True})
 

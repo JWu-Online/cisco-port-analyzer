@@ -329,6 +329,40 @@ async function testSwitch(s, row, cell) {
   const up = data.uptime_days !== null ? ` It has been up ${Math.round(data.uptime_days)} days.` : "";
   cell.textContent = `Logged in to ${data.name} and read ${plural(data.ports, "port")}: ${data.inactive} inactive` +
     (data.unsure ? `, ${data.unsure} unsure` : "") + `.${up} (${data.seconds}s)` + (data.problem ? ` ${data.problem}` : "");
+  // Empty Name and Location fields get what the switch says: its hostname and its SNMP location
+  const tr = row.previousElementSibling;
+  const filled = [];
+  if (!s.name && data.hostname && data.hostname !== s.address) {
+    s.name = data.hostname;
+    tr.querySelector('input[aria-label="Switch name"]').value = s.name;
+    filled.push("name");
+  }
+  if (!s.location && data.snmp_location) {
+    s.location = data.snmp_location;
+    tr.querySelector('input[aria-label="Location"]').value = s.location;
+    filled.push("location");
+  }
+  if (filled.length) {
+    markDirty();
+    cell.textContent += ` Filled in its ${filled.join(" and ")} from the switch; click Save switches to keep ` +
+      (filled.length > 1 ? "them." : "it.");
+  }
+}
+
+// A run fills in empty names and locations on the saved list from the switches themselves; show them here
+// too, without losing anything you've typed and not saved yet
+async function refreshSwitchDetails() {
+  const { data } = await api("/api/state");
+  if (!data || !data.switches) return;
+  const fresh = new Map(data.switches.map(s => [s.address, s]));
+  let changed = false;
+  for (const s of state.switches) {
+    const f = fresh.get(s.address);
+    if (!f) continue;
+    if (!s.name && f.name) { s.name = f.name; changed = true; }
+    if (!s.location && f.location) { s.location = f.location; changed = true; }
+  }
+  if (changed) { renderSwitchRows(); renderScope(); }
 }
 
 function fillSettings() {
@@ -405,6 +439,7 @@ async function poll() {
   $("#progressFill").style.width = p.total ? `${Math.round(100 * p.done / p.total)}%` : "0";
   if (data.state === "running") { state.pollTimer = setTimeout(poll, 1000); return; }
   setRunning(false);
+  if (data.state === "done") await refreshSwitchDetails();
   if (data.state === "done" && data.report_file) {
     await loadReport(data.report_file, true);
     $("#results").scrollIntoView({ behavior: reduceMotion() ? "auto" : "smooth" });

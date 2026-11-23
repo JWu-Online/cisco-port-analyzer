@@ -101,15 +101,24 @@ def mac_columns(vlan, macs):
 # ---------------------------------------------------------------------------
 COLUMNS = [
     ("Switch", "switch"), ("Address", "address"), ("Building", "building"), ("Location", "location"),
+    ("SNMP location", "snmp_location"),
     ("Member/slot", "member"), ("Port", "port"), ("Interface", "interface"), ("Description", "description"),
     ("VLAN", "vlan"), ("VLAN name", "vlan_name"), ("Tagged VLANs", "tagged"), ("Status", "status"),
     ("Speed", "speed"), ("Duplex", "duplex"), ("Result", "result"), ("Last active", "last_active"),
     ("Why", "why"), ("Issues", "issues"), ("Power", "power"), ("MAC addresses", "macs"),
     ("MAC count", "mac_count"),
 ]
-STATUS = {"connected": "Link up", "notconnect": "No link", "disabled": "Shut down",
-          "err-disabled": "Err-disabled", "err-disable": "Err-disabled", "up": "Link up", "down": "No link",
-          "admin down": "Shut down", "administratively down": "Shut down"}
+# The Status column uses the switch's own words, as 'show interfaces status' prints them: connected, notconnect,
+# disabled, err-disabled (and sfpAbsent, inactive, ... as the switch says them). Switches that only say up/down
+# (Dell, Aruba) get the same words.
+STATUS = {"up": "connected", "down": "notconnect", "admin down": "disabled", "administratively down": "disabled",
+          "err-disable": "err-disabled", "errdisabled": "err-disabled", "notconnec": "notconnect",
+          "notconnected": "notconnect"}
+
+
+def status_word(port):
+    word = (port.get("state") or port.get("status") or "").strip()
+    return STATUS.get(word.lower(), word)
 def _link(value):
     """'a-1000' -> '1000', 'a-full' -> 'Full', 'auto' (no link) -> ''."""
     value = re.sub(r"^a-", "", (value or "").strip())
@@ -145,10 +154,11 @@ def rows_from_stack(data, switch):
             rows.append({
                 "switch": data["hostname"], "address": switch["address"],
                 "building": switch.get("building", ""), "location": switch.get("location", ""),
+                "snmp_location": switch.get("snmp_location", ""),
                 "member": m["number"], "port": p["num"], "interface": p["name"], "description": p["desc"],
                 "vlan": _vlan_word(p["vlan"]), "vlan_name": names.get(p["vlan"], ""),
                 "tagged": ", ".join(f"{v} {names[v]}" if v in names else v for v in tagged),
-                "status": STATUS.get(p["status"], p["status"]),
+                "status": status_word(p),
                 "speed": _link(p.get("speed")), "duplex": _link(p.get("duplex")),
                 "result": topology.LABEL[p["activity"]], "last_active": p.get("last_active", ""),
                 "why": p.get("why", ""), "issues": ", ".join(i["title"] for i in p.get("issues", [])),
@@ -182,10 +192,11 @@ def rows_from_check(info, raw, switch, now=None):
             last = ""
         rows.append({
             "switch": info["name"], "address": switch["address"], "building": switch.get("building", ""),
-            "location": switch.get("location", ""), "member": numbers[0] if len(numbers) > 1 else "",
+            "location": switch.get("location", ""), "snmp_location": switch.get("snmp_location", ""),
+            "member": numbers[0] if len(numbers) > 1 else "",
             "port": numbers[-1] if numbers else "", "interface": p["port"], "description": p["description"],
             "vlan": _vlan_word(p["vlan"]), "vlan_name": names.get(p["vlan"], ""), "tagged": "",
-            "status": STATUS.get(p["status"], p["status"]), "speed": "", "duplex": "",
+            "status": status_word(p), "speed": "", "duplex": "",
             "result": analyzer.RESULT_LABEL[p["result"]], "last_active": last,
             "why": p.get("why", ""), "issues": "", "power": "", "_vlan": p["vlan"],
             "_key": analyzer.match_key(p["port"]),
@@ -193,14 +204,24 @@ def rows_from_check(info, raw, switch, now=None):
     return rows
 
 
+def _with_location(switch, snmp_location):
+    """The switch with what it says its location is; its Location on the list stays, or is that when empty."""
+    return {**switch, "snmp_location": snmp_location, "location": switch.get("location") or snmp_location}
+
+
 def document_switch(switch, login, months, timeout=20, history_dir=None, debug_dir=None, now=None):
     """Log into one switch and return {"name", "rows", "problem", "macs"}. Never raises."""
     vendor = switch["type"]
-    out = {"name": switch.get("name") or switch["address"], "rows": [], "problem": "", "macs": 0}
+    out = {"name": switch.get("name") or switch["address"], "rows": [], "problem": "", "macs": 0,
+           "hostname": "", "snmp_location": ""}
     try:
         if vendor in topology.VENDORS:
             outputs = topology.collect_outputs(switch["address"], switch["protocol"], login, timeout,
-                                               lambda msg: None, vendor, extra={"macs": MAC_COMMANDS[vendor]})
+                                               lambda msg: None, vendor,
+                                               extra={"macs": MAC_COMMANDS[vendor],
+                                                      "location": lambda conn: sw.read_location(conn, vendor)})
+            out["hostname"], out["snmp_location"] = outputs.get("prompt", ""), outputs.get("location", "")
+            switch = _with_location(switch, out["snmp_location"])
             history = topology.load_history(history_dir, switch["address"]) if history_dir else None
             where = ", ".join(x for x in (switch.get("building"), switch.get("location")) if x)
             data, history = topology.build_stack(outputs, switch["address"], months, history, now=now, where=where,
@@ -214,11 +235,14 @@ def document_switch(switch, login, months, timeout=20, history_dir=None, debug_d
         else:
             info = {"name": out["name"], "ports": []}
             with sw.connect(switch["address"], vendor, switch["protocol"], login, timeout) as conn:
-                info["name"] = sw.prompt_name(conn) or out["name"]
+                out["hostname"] = sw.prompt_name(conn)
+                info["name"] = out["hostname"] or out["name"]
                 ports, uptime, raw = analyzer.READERS[vendor](conn)
                 if vendor == "cisco_nxos":
                     _, raw["show vlan brief"] = sw.run_first_working(conn, ["show vlan brief"])
                 _, mac_output = sw.run_first_working(conn, list(MAC_COMMANDS[vendor]), read_timeout=300)
+                out["snmp_location"] = sw.read_location(conn, vendor)
+            switch = _with_location(switch, out["snmp_location"])
             threshold = months * analyzer.DAYS_PER_MONTH
             info["ports"] = [analyzer.classify(p, threshold, months)
                              for p in sorted(ports, key=lambda p: analyzer.port_key(p["port"]))]
@@ -329,7 +353,7 @@ def zip_bytes(folder):
 # ---------------------------------------------------------------------------
 # A run over many switches, reported through an analyzer.Job
 # ---------------------------------------------------------------------------
-def run_job(job, switches, logins, months, settings, out_dir, history_dir, debug_dir, scope_label):
+def run_job(job, switches, logins, months, settings, out_dir, history_dir, debug_dir, scope_label, learn=None):
     job.state = "running"
     try:
         job.progress = {"done": 0, "total": len(switches)}
@@ -364,6 +388,8 @@ def run_job(job, switches, logins, months, settings, out_dir, history_dir, debug
                                     analyzer.port_key(r["switch"]["address"])))
         folder = save_run(out_dir, results, scope_label, months)
         job.report_file = folder
+        analyzer.share_learned(job, learn, {r["switch"]["address"]: {"name": r["hostname"], "location": r["snmp_location"]}
+                                            for r in results})
         done = [r for r in results if r["rows"]]
         failed = len(results) - len(done)
         job.log(f"Done. {sum(len(r['rows']) for r in done)} ports on {len(done)} switches"

@@ -40,7 +40,9 @@ def wait(client, base):
 
 
 def main():
-    ios_cli = MockCLI("C-IDF4-SW1", S.OUTPUTS["cisco_ios"], start_enabled=False, enable_secret="en-secret")
+    ios_cli = MockCLI("C-IDF4-SW1", {**S.OUTPUTS["cisco_ios"], "show running-config | include snmp-server location":
+                                     "snmp-server location C Building 4th floor closet\n"},
+                      start_enabled=False, enable_secret="en-secret")
     nxos_cli = MockCLI("LGCC-N7K", S.OUTPUTS["cisco_nxos"])
     dell_cli = MockCLI("B218-5548P", S.OUTPUTS["dell_powerconnect"], start_enabled=False, enable_secret="en-secret")
     aruba_cli = MockCLI("S3500-M205", S.OUTPUTS["aruba_mas"], start_enabled=False, enable_secret="en-secret",
@@ -63,7 +65,7 @@ def main():
 
     print("\nSaving the switch list")
     switches = [
-        {"address": addr["ios"], "type": "2960x", "protocol": "telnet", "building": "C Building", "location": "C4 IDF"},
+        {"address": addr["ios"], "type": "2960x", "protocol": "telnet", "building": "C Building", "location": ""},
         {"address": addr["nxos"], "type": "N7k", "protocol": "ssh", "building": "M Building", "location": "Main MDF"},
         {"address": addr["dell"], "type": "5548P", "protocol": "telnet", "building": "B Building", "location": "B2 IDF"},
         {"address": addr["aruba"], "type": "S3500", "protocol": "telnet", "building": "M Building", "location": "M2 IDF",
@@ -110,6 +112,12 @@ def main():
                 and r.json.get("name") == "S3500-M205", r.json)
     r = client.post("/api/test-switch", json={"switch": switches[1], **login}, **base)
     ok &= check("Nexus test login uses the SSH login", r.json.get("ok") and r.json.get("ports") == 4, r.json)
+    r = client.post("/api/test-switch", json={"switch": switches[0], **login}, **base)
+    ok &= check("test login says the switch's hostname and SNMP location (the page fills empty fields with them)",
+                r.json.get("hostname") == "C-IDF4-SW1" and r.json.get("snmp_location") == "C Building 4th floor closet",
+                r.json)
+    ok &= check("a test login doesn't change the saved list",
+                client.get("/api/state", **base).json["switches"][0]["location"] == "", r.json)
 
     print("\nChecking every switch")
     r = client.post("/api/run", json={"months": 6, "scope": "", **login}, **base)
@@ -149,6 +157,15 @@ def main():
                 names[addr["bad"]])
     ok &= check("names come from the switch prompts", names[addr["aruba"]]["name"] == "S3500-M205"
                 and names[addr["nxos"]]["name"] == "LGCC-N7K")
+    ok &= check("a switch with no location on the list shows its SNMP location in the report",
+                names[addr["ios"]]["location"] == "C Building 4th floor closet", names[addr["ios"]])
+    saved = {s["address"]: (s["name"], s["location"]) for s in client.get("/api/state", **base).json["switches"]}
+    ok &= check("empty names and locations on the list filled in from the switches, the rest left alone",
+                saved == {addr["ios"]: ("C-IDF4-SW1", "C Building 4th floor closet"), addr["nxos"]: ("LGCC-N7K", "Main MDF"),
+                          addr["dell"]: ("B218-5548P", "B2 IDF"), addr["aruba"]: ("M2 Aruba", "M2 IDF"),
+                          addr["bad"]: ("B-IDF3 SW3", "B3 IDF"), addr["wrong"]: ("C-IDF9-SW1", "C9 IDF")}, saved)
+    ok &= check("the log says so", any("Filled in 4 names and 1 location on your switch list" in ln["msg"]
+                                       for ln in snap["lines"]), [ln["msg"] for ln in snap["lines"]])
     ok &= check("closet switch went into enable mode", ios_cli.enabled and dell_cli.enabled and aruba_cli.enabled)
     ok &= check("paging turned off on each type", "terminal length 0" in ios_cli.commands
                 and "terminal datadump" in dell_cli.commands and "no paging" in aruba_cli.commands)
