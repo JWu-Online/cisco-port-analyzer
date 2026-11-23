@@ -70,6 +70,7 @@ def collect(switch, login, timeout=20):
         outputs["prompt"] = sw.prompt_name(conn)
         for key, commands in COMMANDS[vendor].items():
             _, outputs[key] = sw.run_first_working(conn, list(commands), read_timeout=300 if key in BIG else 120)
+        outputs["location"] = sw.read_location(conn, vendor)          # its SNMP location, for the switch list
     return outputs
 
 
@@ -362,7 +363,8 @@ def build_map(results, overrides=None, scope="", now=None, also_draw=None, whole
         ident = switch_identity(outputs, s["type"]) if outputs else {"hostname": "", "model": "", "macs": set()}
         node_id = s["address"]
         node = nodes[node_id] = _node(node_id, ident["hostname"] or s.get("name") or s["address"], s["address"],
-                                      ident["model"], s.get("building", ""), s.get("location", ""), s["type"], True, True)
+                                      ident["model"], s.get("building", ""),
+                                      s.get("location") or (outputs or {}).get("location", ""), s["type"], True, True)
         node.update(read=bool(outputs), problem=res.get("problem", ""), _macs=ident["macs"])
         by_ip[s["address"]] = node_id
         for name in (ident["hostname"], s.get("name")):     # what it calls itself, and its name on the list
@@ -600,7 +602,8 @@ def save_debug(debug_dir, address, outputs):
     return path
 
 
-def run_job(job, switch_list, logins, settings, data_dir, debug_dir, scope_label, also_draw=None, whole_list=None):
+def run_job(job, switch_list, logins, settings, data_dir, debug_dir, scope_label, also_draw=None, whole_list=None,
+            learn=None):
     """Read every switch, a few at a time, then draw and save the map."""
     job.state = "running"
     try:
@@ -635,6 +638,9 @@ def run_job(job, switch_list, logins, settings, data_dir, debug_dir, scope_label
         data = build_map(results, load_overrides(data_dir), scope_label, also_draw=also_draw, whole_list=whole_list)
         path = save_page(data_dir, render_html(data))
         job.report_file = path
+        analyzer.share_learned(job, learn, {r["switch"]["address"]: {"name": r["outputs"].get("prompt", ""),
+                                                                     "location": r["outputs"].get("location", "")}
+                                            for r in results if r["outputs"]})
         s = data["summary"]
         job.log(f"Done. {s['read']} of {s['listed']} switches read, {s['links']} links, "
                 f"{s['layers']['core']} core, {s['layers']['distribution']} distribution, "

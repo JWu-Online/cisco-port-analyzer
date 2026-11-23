@@ -79,12 +79,13 @@
       <details class="more">
         <summary>What's in each row</summary>
         <dl class="cols">
-          <dt>Switch, Address, Building, Location</dt><dd>The switch's name (from its prompt) and what your switch list says about it.</dd>
+          <dt>Switch, Address, Building, Location</dt><dd>The switch's name (from its prompt) and what your switch list says about it. An empty Name or Location on the list is filled in from the switch on its first run.</dd>
+          <dt>SNMP location</dt><dd>What the switch's own config says: its <code>snmp-server location</code>.</dd>
           <dt>Member/slot, Port, Interface</dt><dd>Stack member (or chassis slot), the port number on it, and the full port name like Gi2/0/14.</dd>
           <dt>Description</dt><dd>The port's description on the switch.</dd>
           <dt>VLAN, VLAN name</dt><dd>The port's VLAN (on a Dell, its PVID), or Trunk.</dd>
           <dt>Tagged VLANs</dt><dd>Other VLANs on the port: the voice VLAN, or the VLANs a trunk carries ("all" if it isn't limited).</dd>
-          <dt>Status, Speed, Duplex</dt><dd>Link up, no link, shut down or err-disabled, and what it linked at.</dd>
+          <dt>Status, Speed, Duplex</dt><dd>In the switch's own words: connected, notconnect, disabled or err-disabled (or sfpAbsent and the like), and what it linked at.</dd>
           <dt>Result, Last active, Why</dt><dd>Active, Inactive or Unsure for the months you picked, the same way as the Stack topology page.</dd>
           <dt>Issues, Power</dt><dd>Power and slow-connection problems, and what the port powers (Cisco Catalyst and Dell).</dd>
           <dt>MAC addresses, MAC count</dt><dd>Every MAC address the switch has learned on the port, as 0011.2233.4455, and how many there are. Trunk ports just say "Trunk port", with no count.</dd>
@@ -206,6 +207,10 @@
       $("#progressFill").style.width = p.total ? Math.round(100 * p.done / p.total) + "%" : "0";
       if (data.state === "running") { setRunning(true); state.timer = setTimeout(poll, 1000); return; }
       setRunning(false);
+      if (data.state === "done") {               // names and locations it filled in on the list
+        var fresh = (await api("/api/state")).data;
+        if (fresh && fresh.switches) { state.switches = fresh.switches; renderScope(); }
+      }
       if (data.state === "done" && data.report_file) {
         state.fresh = data.report_file;
         await loadRuns();

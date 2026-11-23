@@ -126,6 +126,45 @@ def run_first_working(conn, commands, read_timeout=180):
     return None, ""
 
 
+# Where a switch says it is: its SNMP location (snmp-server location in the config)
+LOCATION_COMMANDS = {
+    "cisco_ios": ("show running-config | include snmp-server location", "show snmp location"),
+    "cisco_nxos": ("show running-config snmp", "show snmp"),
+    "dell_powerconnect": ("show running-config | include snmp-server location", "show system"),
+    "aruba_mas": ("show running-config | include location",),
+}
+_LOCATION_LINE = re.compile(r"(?i)^\s*(?:snmp-server\s+location|syslocation)\s+(.+?)\s*$")
+_LOCATION_FIELD = re.compile(r"(?i)^\s*sys(?:tem)?\s*location\s*[:=]\s*(.*?)\s*$")
+
+
+def parse_location(output, bare=False):
+    """'snmp-server location B Building 2nd floor' / 'System Location: ...' / 'sys location: ...' -> the text.
+    bare: the whole answer is the location ('show snmp location' on a Catalyst)."""
+    lines = [line for line in (output or "").splitlines() if line.strip()]
+    for line in lines:
+        m = _LOCATION_LINE.match(line) or _LOCATION_FIELD.match(line)
+        if m and m.group(1).strip().strip('"').strip():
+            return " ".join(m.group(1).strip().strip('"').split())
+    if bare and lines and not lines[0].lstrip().startswith("%") and len(lines) == 1:
+        return " ".join(lines[0].split())
+    return ""
+
+
+def read_location(conn, vendor, read_timeout=60):
+    """The switch's SNMP location, or '' if it has none (or this login can't see it). Never raises."""
+    for cmd in LOCATION_COMMANDS.get(vendor, ()):
+        try:
+            out = conn.send_command(cmd, read_timeout=read_timeout)
+        except Exception:
+            continue
+        if ERROR_TEXT.search(out[:400]):
+            continue
+        found = parse_location(out, bare=cmd == "show snmp location")
+        if found:
+            return found[:120]
+    return ""
+
+
 def friendly_error(exc):
     text = str(exc).strip() or exc.__class__.__name__
     first = text.splitlines()[0]

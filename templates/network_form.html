@@ -182,6 +182,10 @@
       $("#progressFill").style.width = p.total ? Math.round(100 * p.done / p.total) + "%" : "0";
       if (data.state === "running") { setRunning(true); state.timer = setTimeout(poll, 1000); return; }
       setRunning(false);
+      if (data.state === "done") {               // names and locations it filled in on the list
+        var fresh = (await api("/api/state")).data;
+        if (fresh && fresh.switches) { state.switches = fresh.switches; renderScope(); }
+      }
       if (data.state === "done" && data.report_file) {
         state.fresh = data.report_file;
         await loadRuns();

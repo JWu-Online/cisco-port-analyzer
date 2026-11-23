@@ -139,13 +139,21 @@ Click **Port documentation** at the top of the page to make CSVs of every port o
 - **One CSV, every switch**: every port of every switch in one file.
 - **One CSV per switch (.zip)**: a file per switch, named after it.
 
-Each row has: Switch (its name), Address, Building, Location, Member/slot, Port, Interface, Description, VLAN, VLAN name, Tagged VLANs (the voice VLAN, or what a trunk carries), Status, Speed, Duplex, Result (Active, Inactive or Unsure for the months you picked), Last active, Why, Issues, Power (what the port powers), **MAC addresses** (every MAC the switch has learned on that port, as `0011.2233.4455`) and **MAC count** (how many). Trunk ports just say **Trunk port**, with no count.
+Each row has: Switch (its name), Address, Building, Location, **SNMP location** (what the switch's own `snmp-server location` says), Member/slot, Port, Interface, Description, VLAN, VLAN name, Tagged VLANs (the voice VLAN, or what a trunk carries), **Status** (in the switch's own words, as `show interfaces status` prints them: `connected`, `notconnect`, `disabled`, `err-disabled`, or another word the switch uses such as `sfpAbsent`; Dell and Aruba switches, which only say up or down, get the same words), Speed, Duplex, Result (Active, Inactive or Unsure for the months you picked), Last active, Why, Issues, Power (what the port powers), **MAC addresses** (every MAC the switch has learned on that port, as `0011.2233.4455`) and **MAC count** (how many). Trunk ports just say **Trunk port**, with no count.
 
 - **Cisco Catalyst and Dell** switches get everything the Stack topology page shows, for ports 1–48 of every stack member (uplink ports aren't included). It also updates the same history the Stack topology page keeps, so either one helps the other with Unsure ports.
 - **Cisco Nexus and Aruba** switches get every port, with the columns those switches can fill: description, VLAN and its name, status, result, last active and MACs.
 - A switch that couldn't be read is listed under the run as **Not included**, with the reason; the others are still saved.
 
 The CSVs are saved in `data\docs\<date-time>\`, and earlier runs stay listed on the page. They open straight in Excel. A description starting with `=`, `+`, `-` or `@` gets a `'` in front so Excel shows it as text instead of running it.
+
+## Names and locations filled in from the switches
+
+The first time a switch is logged into (Check ports, Port documentation, Network map, or **Test login** in the switch list), its **Name** and **Location** on your switch list are filled in from the switch itself, **if they're empty**:
+- **Name**: the switch's hostname, the same name the Switch column shows.
+- **Location**: its SNMP location, the `snmp-server location` line in its config (`show running-config | include snmp-server location`; `show snmp location` if the login can't see the config; `syslocation` on an Aruba).
+
+Anything you've typed is never changed. The log says how many it filled in. To have a switch's location read again, empty its Location and run again. A switch with no SNMP location set keeps an empty Location.
 
 ## Network map
 
