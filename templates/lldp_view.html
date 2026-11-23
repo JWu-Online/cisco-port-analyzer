@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLDP neighbors{% if data.created %} {{ data.created }}{% endif %} - Port Analyzer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Crect x='6' y='12' width='5' height='4' fill='%232a78d6'/%3E%3Crect x='13' y='12' width='5' height='4' fill='%23eb6834'/%3E%3Crect x='20' y='12' width='5' height='4' fill='%231baf7a'/%3E%3Crect x='6' y='19' width='5' height='4' fill='%234A5662'/%3E%3Crect x='13' y='19' width='5' height='4' fill='%232a78d6'/%3E%3Crect x='20' y='19' width='5' height='4' fill='%234A5662'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+  <style>
+    /* Device colors: three categorical slots (validated all-pairs, light and dark), "other" is a neutral gray.
+       Every colored port also carries its letter (P, A, S, O), and every device is in the table under it. */
+    :root {
+      --k-phone: #2a78d6; --k-ap: #eb6834; --k-network: #1baf7a; --k-other: #8a8984;
+      --p-idle: #DCE2E8; --p-glyph: #0b0b0b; --p-err: #d03b3b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --k-phone: #3987e5; --k-ap: #d95926; --k-network: #199e70; --k-other: #8e8d86;
+              --p-idle: #34414D; --p-err: #e66767; }
+    }
+    .topbar-row .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .demo-note { margin-top: 8px; }
+
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+    .tile { text-align: left; background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--radius);
+            padding: 12px 14px; cursor: pointer; font: inherit; color: inherit; display: grid; gap: 2px; }
+    .tile:hover { border-color: var(--line); }
+    .tile[aria-pressed="true"] { border-color: var(--action); box-shadow: inset 0 0 0 1px var(--action); }
+    .tile .label { display: flex; align-items: center; gap: 7px; font-size: 0.85rem; color: var(--ink-2); }
+    .tile .value { font-size: 1.7rem; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+    .tile .note { font-size: 0.78rem; color: var(--ink-3); }
+
+    .sw { display: inline-grid; place-items: center; width: 18px; height: 16px; border-radius: 3px; flex: none;
+          font: 700 10px/1 var(--sans); color: var(--p-glyph); }
+    .k-phone { background: var(--k-phone); } .k-ap { background: var(--k-ap); }
+    .k-network { background: var(--k-network); } .k-other { background: var(--k-other); }
+    .s-idle { background: var(--p-idle); } .s-off { background: transparent; box-shadow: inset 0 0 0 1px var(--ink-3); }
+    .s-shut { background: repeating-linear-gradient(135deg, transparent 0 3px, var(--line) 3px 5px);
+              box-shadow: inset 0 0 0 1px var(--ink-3); }
+    .s-err { background: transparent; box-shadow: inset 0 0 0 2px var(--p-err); color: var(--p-err); }
+
+    .controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: flex-end; }
+    .controls .field { margin: 0; min-width: 200px; }
+    .controls .grow { flex: 1 1 280px; }
+    .controls .check { margin: 0 0 8px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.82rem; color: var(--ink-2); margin-top: 12px; }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .shown { font-size: 0.9rem; color: var(--ink-2); }
+
+    .switch { background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 16px 18px; }
+    .switch[hidden] { display: none; }
+    .sw-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; align-items: baseline; }
+    .sw-head h2 { font-size: 1.1rem; font-weight: 600; }
+    .sw-head .where { color: var(--ink-2); font-size: 0.9rem; }
+    .sw-counts { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 0.85rem; color: var(--ink-2); }
+    .sw-counts span { display: inline-flex; align-items: center; gap: 5px; }
+    .sw-counts .sw { width: 10px; height: 10px; border-radius: 2px; }
+    .sw-problem { margin-top: 8px; }
+
+    .face { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 12px; }
+    .group-label { font: 600 0.72rem var(--mono); color: var(--ink-3); margin-bottom: 3px; }
+    .grid { display: grid; grid-auto-flow: column; grid-template-rows: repeat(var(--rows), auto); gap: 3px; }
+    .num { font: 9px/1 var(--mono); color: var(--ink-3); text-align: center; }
+    .pt { width: 24px; height: 20px; border: 0; border-radius: 3px; padding: 0; cursor: pointer;
+          font: 700 10.5px/20px var(--sans); color: var(--p-glyph); text-align: center; }
+    .pt:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    .pt.dim { opacity: 0.18; }
+    .pt.hit { outline: 2px solid var(--ink); outline-offset: 1px; }
+
+    details.devs { margin-top: 12px; }
+    details.devs > summary { cursor: pointer; color: var(--action); font-size: 0.9rem; }
+    .tbl-wrap { overflow-x: auto; margin-top: 8px; }
+    table.t { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+    table.t th { text-align: left; font-weight: 600; color: var(--ink-2); padding: 6px 8px; border-bottom: 1px solid var(--line);
+                 white-space: nowrap; }
+    table.t td { padding: 5px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; white-space: nowrap; }
+    table.t td.wrap { white-space: normal; min-width: 140px; }
+    table.t tr[hidden] { display: none; }
+    table.t tr.flash td { background: color-mix(in srgb, var(--action) 14%, var(--surface)); }
+    td .sw { margin-right: 6px; vertical-align: -3px; }
+    .muted { color: var(--ink-3); }
+
+    #tip { position: fixed; z-index: 50; pointer-events: none; max-width: 340px; background: var(--surface);
+           border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+           padding: 8px 10px; font-size: 0.84rem; }
+    #tip[hidden] { display: none; }
+    #tip strong { display: block; }
+    #tip .dev { margin-top: 5px; display: flex; gap: 7px; align-items: flex-start; }
+    .empty-filter { padding: 22px; text-align: center; color: var(--ink-3); }
+
+    @media print {
+      .no-print, .controls, .topbar-row .actions, details.devs > summary { display: none !important; }
+      .switch { break-inside: avoid-page; border-color: #bbb; }
+      body { background: #fff; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="link no-print" href="/lldp">&larr; LLDP neighbors</a>
+    <div class="topbar-row">
+      <h1>LLDP neighbors</h1>
+      <div class="actions">
+        {% if run %}
+        <a class="btn" href="/lldp/download/{{ run }}/devices">Devices CSV</a>
+        <a class="btn" href="/lldp/download/{{ run }}/ports">Every port CSV</a>
+        <a class="btn" href="/lldp/download/{{ run }}/zip">One CSV per switch (.zip)</a>
+        {% endif %}
+        <button class="btn" id="printBtn">Print / Save PDF</button>
+      </div>
+    </div>
+    <p>{{ data.scope }} · read {{ data.created }} · <span id="totalLine"></span></p>
+    {% if data.demo %}<div class="notice warn demo-note"><p>A made-up building, to show what the page looks like. Nothing was logged into.</p></div>{% endif %}
+  </header>
+
+  <main>
+    <section class="tiles" id="tiles" aria-label="Devices found, by type. Click to show only that type."></section>
+
+    <section class="panel">
+      <div class="controls">
+        <label class="field"><span>Building</span><select id="building"></select></label>
+        <label class="field grow"><span>Find</span>
+          <input id="q" type="search" placeholder="Switch, port, description, device name, IP, model or MAC" autocomplete="off"></label>
+        <label class="check"><input type="checkbox" id="every"> <span>List every port, not just ones with a device</span></label>
+        <button class="btn small" id="openAll" type="button">Open every list</button>
+      </div>
+      <div class="legend" aria-label="What the port colors mean">
+        <span><i class="sw k-phone">P</i>Phone</span>
+        <span><i class="sw k-ap">A</i>Access point</span>
+        <span><i class="sw k-network">S</i>Switch or router</span>
+        <span><i class="sw k-other">O</i>Other device (printer, camera, server…)</span>
+        <span><i class="sw s-idle"></i>Link up, nothing said who it is (a PC, usually)</span>
+        <span><i class="sw s-off"></i>No link</span>
+        <span><i class="sw s-shut"></i>Shut down</span>
+        <span><i class="sw s-err">!</i>Err-disabled</span>
+      </div>
+      <p class="shown" id="shown" style="margin-top:10px"></p>
+    </section>
+
+    <div id="switches" style="display:grid;gap:14px"></div>
+    <p class="empty-filter" id="noMatch" hidden>Nothing matches. Clear the search or the type you picked.</p>
+  </main>
+  <div id="tip" role="tooltip" hidden></div>
+
+  <script>
+  (function () {
+    "use strict";
+    var D = {{ data|tojson }};
+    var KINDS = D.kinds;
+    var ORDER = ["phone", "ap", "network", "other"];     // (the data's keys come in alphabetical order)
+    var LETTER = { phone: "P", ap: "A", network: "S", other: "O" };
+    var PLURAL = { phone: "phones", ap: "access points", network: "switches or routers", other: "other devices" };
+    var $ = function (s) { return document.querySelector(s); };
+    var state = { kinds: {}, q: "", building: "", every: false };
+    var built = [];                      // per switch: {s, sec, details, ports: [{p, btn, rows, kinds, text}]}
+
+    function el(tag, cls, text) {
+      var e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined && text !== null) e.textContent = text;
+      return e;
+    }
+    function natural(a, b) { return String(a || "").localeCompare(String(b || ""), undefined, { numeric: true }); }
+    function plural(n, one, many) { return n + " " + (n === 1 ? one : many); }
+    function portLook(p) {
+      if (p.neighbors.length) {
+        var best = p.neighbors.slice().sort(function (a, b) {
+          return ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind);
+        })[0];
+        return { cls: "k-" + best.kind, glyph: LETTER[best.kind] };
+      }
+      if (p.status === "connected") return { cls: "s-idle", glyph: "" };
+      if (p.status === "disabled") return { cls: "s-shut", glyph: "" };
+      if (/^err/.test(p.status)) return { cls: "s-err", glyph: "!" };
+      return { cls: "s-off", glyph: "" };
+    }
+    function statusText(p) {
+      if (!p.status) return "";
+      if (p.status === "connected" && !p.neighbors.length) return "connected, nothing said who it is";
+      return p.status;
+    }
+
+    // ---- tiles ----
+    var idle = 0;
+    D.switches.forEach(function (s) { s.ports.forEach(function (p) { if (p.status === "connected" && !p.neighbors.length) idle++; }); });
+    var total = 0;
+    ORDER.forEach(function (k) {
+      total += D.counts[k];
+      var b = el("button", "tile");
+      b.type = "button";
+      b.setAttribute("aria-pressed", "false");
+      var label = el("span", "label");
+      label.appendChild(el("i", "sw k-" + k, LETTER[k]));
+      label.appendChild(document.createTextNode(KINDS[k]));
+      b.appendChild(label);
+      b.appendChild(el("span", "value", String(D.counts[k])));
+      b.appendChild(el("span", "note", "Click to show only these"));
+      b.addEventListener("click", function () {
+        state.kinds[k] = !state.kinds[k];
+        b.setAttribute("aria-pressed", String(!!state.kinds[k]));
+        apply();
+      });
+      $("#tiles").appendChild(b);
+    });
+    var it = el("div", "tile");
+    it.style.cursor = "default";
+    var il = el("span", "label");
+    il.appendChild(el("i", "sw s-idle"));
+    il.appendChild(document.createTextNode("Link up, nothing said who it is"));
+    it.appendChild(il);
+    it.appendChild(el("span", "value", String(idle)));
+    it.appendChild(el("span", "note", "PCs and the like; their MACs are in Port documentation"));
+    $("#tiles").appendChild(it);
+    $("#totalLine").textContent = plural(total, "device", "devices") + " on " + plural(D.read, "switch", "switches") +
+      (D.failed ? " · " + plural(D.failed, "switch", "switches") + " couldn't be read" : "");
+
+    // ---- buildings ----
+    var buildings = {};
+    D.switches.forEach(function (s) { buildings[s.building || ""] = (buildings[s.building || ""] || 0) + 1; });
+    var bsel = $("#building");
+    bsel.appendChild(new Option("All buildings (" + D.switches.length + ")", ""));
+    Object.keys(buildings).sort(natural).forEach(function (b) {
+      bsel.appendChild(new Option((b || "No building") + " (" + buildings[b] + ")", b || "\u0000"));
+    });
+
+    // ---- one switch ----
+    function groupsOf(ports) {
+      var groups = [], by = {};
+      ports.forEach(function (p) {
+        var m = p.port.match(/^(.*?)(\d+)$/);
+        var key = m ? m[1] : p.port, num = m ? m[2] : "";
+        if (!by[key]) { by[key] = { key: key, ports: [] }; groups.push(by[key]); }
+        by[key].ports.push({ p: p, num: num });
+      });
+      return groups;
+    }
+    function buildSwitch(s) {
+      var sec = el("section", "switch");
+      var head = el("div", "sw-head");
+      var left = el("div");
+      var h = el("h2", null, s.name);
+      left.appendChild(h);
+      left.appendChild(el("div", "where", [s.address, s.building, s.location, s.type ? ({ cisco_ios: "Cisco Catalyst",
+        cisco_nxos: "Cisco Nexus", dell_powerconnect: "Dell", aruba_mas: "Aruba" })[s.type] : ""]
+        .filter(Boolean).join(" · ")));
+      head.appendChild(left);
+      var counts = el("div", "sw-counts");
+      ORDER.forEach(function (k) {
+        if (!s.counts[k]) return;
+        var c = el("span");
+        c.appendChild(el("i", "sw k-" + k));
+        c.appendChild(document.createTextNode(s.counts[k] + " " + (s.counts[k] === 1 ? KINDS[k].toLowerCase() : PLURAL[k])));
+        counts.appendChild(c);
+      });
+      head.appendChild(counts);
+      sec.appendChild(head);
+      var entry = { s: s, sec: sec, ports: [], details: null };
+      if (!s.ports.length) {
+        var n = el("div", "notice error sw-problem");
+        n.appendChild(el("p", null, "Couldn't read it: " + (s.problem || "no answer")));
+        sec.appendChild(n);
+        built.push(entry);
+        return sec;
+      }
+      if (s.problem) {
+        var w = el("div", "notice warn sw-problem");
+        w.appendChild(el("p", null, s.problem));
+        sec.appendChild(w);
+      }
+      // the front of the switch: odd ports on top, even below, like the real thing
+      var face = el("div", "face");
+      var rowsFor = {};
+      groupsOf(s.ports).forEach(function (g) {
+        var box = el("div");
+        box.appendChild(el("div", "group-label", g.key.replace(/[\/:]$/, "") || "ports"));
+        var two = g.ports.length > 12;
+        var grid = el("div", "grid");
+        grid.style.setProperty("--rows", two ? 4 : 2);
+        var cells = [];
+        g.ports.forEach(function (gp, i) {
+          var b = el("button", "pt");
+          b.type = "button";
+          var look = portLook(gp.p);
+          b.className = "pt " + look.cls;
+          b.textContent = look.glyph;
+          b.setAttribute("aria-label", gp.p.port + ": " + (gp.p.neighbors.length ? gp.p.neighbors.map(function (d) {
+            return d.name + " (" + KINDS[d.kind] + ")"; }).join(", ") : statusText(gp.p) || "no link"));
+          cells.push({ b: b, p: gp.p, num: gp.num, top: !two || i % 2 === 0 });
+        });
+        if (two) {
+          for (var i = 0; i < cells.length; i += 2) {             // column: number, odd port, even port, number
+            grid.appendChild(el("div", "num", cells[i].num));
+            grid.appendChild(cells[i].b);
+            grid.appendChild(cells[i + 1] ? cells[i + 1].b : el("div"));
+            grid.appendChild(el("div", "num", cells[i + 1] ? cells[i + 1].num : ""));
+          }
+        } else {
+          cells.forEach(function (c) { grid.appendChild(c.b); grid.appendChild(el("div", "num", c.num)); });
+        }
+        box.appendChild(grid);
+        face.appendChild(box);
+        cells.forEach(function (c) {
+          var kinds = c.p.neighbors.map(function (d) { return d.kind; });
+          var text = [s.name, s.address, c.p.port, c.p.description, c.p.status].concat(c.p.neighbors.map(function (d) {
+            return [d.name, d.ip, d.model, d.mac, d.their_port, KINDS[d.kind]].join(" ");
+          })).join(" ").toLowerCase();
+          var rec = { p: c.p, btn: c.b, rows: [], kinds: kinds, text: text };
+          rowsFor[c.p.port] = rec;
+          entry.ports.push(rec);
+          c.b.addEventListener("mouseenter", function (e) { showTip(rec, e); });
+          c.b.addEventListener("mousemove", function (e) { moveTip(e); });
+          c.b.addEventListener("mouseleave", hideTip);
+          c.b.addEventListener("focus", function () { showTip(rec, null); });
+          c.b.addEventListener("blur", hideTip);
+          c.b.addEventListener("click", function () { goToRow(entry, rec); });
+        });
+      });
+      sec.appendChild(face);
+
+      // the list under it
+      var det = el("details", "devs");
+      var sum = el("summary");
+      det.appendChild(sum);
+      var wrap = el("div", "tbl-wrap");
+      var table = el("table", "t");
+      var thead = el("thead");
+      var hr = el("tr");
+      ["Port", "Description", "Status", "Device", "Type", "IP", "Model / platform", "Its port", "Found by"].forEach(function (t) {
+        hr.appendChild(el("th", null, t));
+      });
+      thead.appendChild(hr);
+      table.appendChild(thead);
+      var tb = el("tbody");
+      entry.ports.forEach(function (rec) {
+        var p = rec.p;
+        var devs = p.neighbors.length ? p.neighbors : [null];
+        devs.forEach(function (d) {
+          var tr = el("tr");
+          tr.appendChild(el("td", "mono", p.port));
+          tr.appendChild(el("td", "wrap", p.description));
+          tr.appendChild(el("td", p.status === "connected" ? null : "muted", p.status));
+          if (d) {
+            var name = el("td");
+            name.appendChild(el("i", "sw k-" + d.kind, LETTER[d.kind]));
+            name.appendChild(document.createTextNode(d.name));
+            tr.appendChild(name);
+            tr.appendChild(el("td", null, KINDS[d.kind]));
+            tr.appendChild(el("td", "mono", d.ip));
+            tr.appendChild(el("td", "wrap", d.model));
+            tr.appendChild(el("td", "mono", d.their_port));
+            tr.appendChild(el("td", "muted", d.found_by));
+          } else {
+            var none = el("td", "muted", p.status === "connected" ? "Nothing said who it is" : "");
+            none.colSpan = 6;
+            tr.appendChild(none);
+          }
+          tr.dataset.kind = d ? d.kind : "";
+          rec.rows.push(tr);
+          tb.appendChild(tr);
+        });
+      });
+      table.appendChild(tb);
+      wrap.appendChild(table);
+      det.appendChild(wrap);
+      sec.appendChild(det);
+      entry.details = det;
+      entry.summary = sum;
+      built.push(entry);
+      return sec;
+    }
+
+    // ---- tooltip ----
+    var tip = $("#tip");
+    function showTip(rec, e) {
+      var p = rec.p;
+      tip.textContent = "";
+      tip.appendChild(el("strong", null, p.port + (p.description ? " · " + p.description : "")));
+      tip.appendChild(el("div", "muted", statusText(p) || "no link"));
+      p.neighbors.forEach(function (d) {
+        var row = el("div", "dev");
+        row.appendChild(el("i", "sw k-" + d.kind, LETTER[d.kind]));
+        var t = el("div");
+        t.appendChild(el("div", null, d.name + " · " + KINDS[d.kind]));
+        t.appendChild(el("div", "muted", [d.model, d.ip, d.their_port ? "its port " + d.their_port : ""].filter(Boolean).join(" · ")));
+        row.appendChild(t);
+        tip.appendChild(row);
+      });
+      tip.hidden = false;
+      if (e) moveTip(e);
+      else {
+        var r = rec.btn.getBoundingClientRect();
+        place(r.left, r.bottom + 6);
+      }
+    }
+    function moveTip(e) { place(e.clientX + 14, e.clientY + 16); }
+    function place(x, y) {
+      var w = tip.offsetWidth, h = tip.offsetHeight;
+      tip.style.left = Math.max(6, Math.min(x, window.innerWidth - w - 8)) + "px";
+      tip.style.top = (y + h > window.innerHeight - 8 ? y - h - 26 : y) + "px";
+    }
+    function hideTip() { tip.hidden = true; }
+
+    function goToRow(entry, rec) {
+      entry.details.open = true;
+      if (!rec.rows[0] || rec.rows[0].hidden) {          // listed only with every port: show it anyway
+        rec.rows.forEach(function (r) { r.hidden = false; });
+      }
+      var r = rec.rows[0];
+      r.scrollIntoView({ block: "center", behavior: "smooth" });
+      rec.rows.forEach(function (row) { row.classList.add("flash"); });
+      setTimeout(function () { rec.rows.forEach(function (row) { row.classList.remove("flash"); }); }, 1600);
+    }
+
+    // ---- filtering: nothing is rebuilt, things are just shown, hidden or dimmed ----
+    function apply() {
+      var picked = Object.keys(state.kinds).filter(function (k) { return state.kinds[k]; });
+      var words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+      var filtering = picked.length > 0 || words.length > 0;
+      var shownSw = 0, shownDev = 0;
+      built.forEach(function (entry) {
+        var s = entry.s;
+        var inBuilding = !state.building || (s.building || "\u0000") === state.building;
+        var any = false, devs = 0;
+        entry.ports.forEach(function (rec) {
+          var kindOk = !picked.length || rec.kinds.some(function (k) { return state.kinds[k]; });
+          var textOk = words.every(function (w) { return rec.text.indexOf(w) >= 0; });
+          var match = kindOk && textOk;
+          rec.btn.classList.toggle("dim", filtering && !match);
+          rec.btn.classList.toggle("hit", words.length > 0 && match);
+          rec.rows.forEach(function (tr) {
+            var kind = tr.dataset.kind;
+            var rowOk = match && (!picked.length || state.kinds[kind]) && (kind || state.every && !filtering);
+            tr.hidden = !rowOk;
+            if (rowOk && kind) devs++;
+          });
+          if (match && (rec.kinds.length || !filtering)) any = true;
+        });
+        var show = inBuilding && (!filtering || any || (words.length && (s.name + " " + s.address).toLowerCase()
+          .indexOf(words.join(" ")) >= 0));
+        entry.sec.hidden = !show;
+        if (entry.summary) {
+          var listed = entry.ports.reduce(function (n, rec) {
+            return n + rec.rows.filter(function (tr) { return !tr.hidden; }).length; }, 0);
+          entry.summary.textContent = state.every && !filtering
+            ? "Every port (" + entry.ports.length + ")"
+            : (filtering ? "Matching devices (" + devs + ")" : "Devices on this switch (" + devs + ")");
+          if (filtering && show && words.length) entry.details.open = listed > 0;
+        }
+        if (show) { shownSw++; shownDev += devs; }
+      });
+      $("#noMatch").hidden = shownSw > 0;
+      $("#shown").textContent = "Showing " + plural(shownSw, "switch", "switches") + ", " +
+        plural(shownDev, "device", "devices") + ".";
+    }
+
+    var list = $("#switches");
+    D.switches.forEach(function (s) { list.appendChild(buildSwitch(s)); });
+    if (built.filter(function (b) { return b.details; }).length <= 6) {
+      built.forEach(function (b) { if (b.details) b.details.open = true; });
+    }
+
+    var timer;
+    $("#q").addEventListener("input", function (e) {
+      clearTimeout(timer);
+      timer = setTimeout(function () { state.q = e.target.value.trim(); apply(); }, 120);
+    });
+    $("#building").addEventListener("change", function (e) { state.building = e.target.value; apply(); });
+    $("#every").addEventListener("change", function (e) { state.every = e.target.checked; apply(); });
+    $("#openAll").addEventListener("click", function () {
+      var open = $("#openAll").textContent.indexOf("Open") === 0;
+      built.forEach(function (b) { if (b.details && !b.sec.hidden) b.details.open = open; });
+      $("#openAll").textContent = open ? "Close every list" : "Open every list";
+    });
+    $("#printBtn").addEventListener("click", function () { window.print(); });
+    window.addEventListener("beforeprint", function () {
+      built.forEach(function (b) { if (b.details && !b.sec.hidden) b.details.open = true; });
+    });
+    window.addEventListener("scroll", hideTip, { passive: true });
+    apply();
+  })();
+  </script>
+</body>
+</html>

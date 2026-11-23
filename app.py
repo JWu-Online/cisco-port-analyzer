@@ -20,6 +20,7 @@ from pathlib import Path
 from flask import Flask, Response, abort, jsonify, render_template, request
 
 import analyzer
+import lldp
 import network
 import portdocs
 import report
@@ -35,6 +36,7 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 TOPOLOGY_DIR = DATA_DIR / "topology"
 DOCS_DIR = DATA_DIR / "docs"
 NETWORK_DIR = DATA_DIR / "network"
+LLDP_DIR = DATA_DIR / "lldp"
 
 DEFAULT_SETTINGS = {"months": 6, "default_protocol": "telnet", "parallel": 10, "timeout": 20}
 SWITCH_FIELDS = ["address", "type", "protocol", "building", "location", "name"]
@@ -48,6 +50,8 @@ docs_job = analyzer.Job()          # Port documentation runs separately from the
 docs_lock = threading.Lock()
 net_job = analyzer.Job()           # and so does the Network map
 net_lock = threading.Lock()
+lldp_job = analyzer.Job()          # and LLDP neighbors
+lldp_lock = threading.Lock()
 
 
 @app.before_request
@@ -500,6 +504,87 @@ def docs_download(run, kind):
         body, mimetype, name = (folder / "all-switches.csv").read_bytes(), "text/csv", f"port-docs-{run}.csv"
     else:
         body, mimetype, name = portdocs.zip_bytes(folder), "application/zip", f"port-docs-{run}-per-switch.zip"
+    return Response(body, mimetype=mimetype, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+# ---------------------------------------------------------------------------
+# LLDP neighbors: what's plugged into each port (phones, access points, switches...), as a page and CSVs
+# ---------------------------------------------------------------------------
+@app.get("/lldp")
+def lldp_page():
+    return render_template("lldp.html")
+
+
+@app.post("/api/lldp/run")
+def lldp_run():
+    global lldp_job
+    payload = request.json or {}
+    with lldp_lock:
+        if lldp_job.state == "running":
+            return jsonify({"ok": False, "problems": ["Neighbors are already being read."]}), 409
+        problems = []
+        chosen, label = pick_switches(str(payload.get("scope", "")), load_switches())
+        if not chosen:
+            problems.append("Add your switches on the Port Analyzer page first." if not load_switches()
+                            else "No switches match that choice.")
+        logins = logins_from(payload)
+        used = {s["protocol"] for s in chosen}
+        if "telnet" in used and not logins["telnet"].password:
+            problems.append("Enter the password.")
+        if "ssh" in used and not logins["ssh"].password:
+            problems.append("Enter the SSH password." if payload.get("ssh_different") else "Enter the password.")
+        problems = list(dict.fromkeys(problems))
+        if problems:
+            return jsonify({"ok": False, "problems": problems}), 400
+        lldp_job = analyzer.Job()
+        threading.Thread(target=lldp.run_job,
+                         args=(lldp_job, chosen, logins, load_settings(), LLDP_DIR, DEBUG_DIR, label),
+                         kwargs={"learn": learn_from_switches}, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/lldp/stop")
+def lldp_stop():
+    lldp_job.stop_requested.set()
+    lldp_job.log("Stopping after the switches already in progress finish...", "warn")
+    return jsonify({"ok": True})
+
+
+@app.get("/api/lldp/job")
+def lldp_job_status():
+    return jsonify(lldp_job.snapshot(int(request.args.get("since", 0))))
+
+
+@app.get("/api/lldp/runs")
+def lldp_runs():
+    return jsonify({"runs": lldp.list_runs(LLDP_DIR)})
+
+
+@app.get("/lldp/view/<run>")
+def lldp_view(run):
+    folder = lldp.run_folder(LLDP_DIR, run)
+    if not folder:
+        abort(404)
+    return render_template("lldp_view.html", data=lldp.load_data(folder), run=run)
+
+
+@app.get("/lldp/demo")
+def lldp_demo():
+    return render_template("lldp_view.html", data=lldp.run_demo(), run="")
+
+
+@app.get("/lldp/download/<run>/<kind>")
+def lldp_download(run, kind):
+    """kind: 'devices' (a row per device), 'ports' (a row per port) or 'zip' (one CSV per switch)."""
+    folder = lldp.run_folder(LLDP_DIR, run)
+    if not folder or kind not in ("devices", "ports", "zip"):
+        abort(404)
+    if kind == "devices":
+        body, mimetype, name = (folder / "devices.csv").read_bytes(), "text/csv", f"lldp-devices-{run}.csv"
+    elif kind == "ports":
+        body, mimetype, name = (folder / "every-port.csv").read_bytes(), "text/csv", f"lldp-every-port-{run}.csv"
+    else:
+        body, mimetype, name = lldp.zip_bytes(folder), "application/zip", f"lldp-{run}-per-switch.zip"
     return Response(body, mimetype=mimetype, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
