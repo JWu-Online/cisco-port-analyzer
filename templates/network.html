@@ -90,6 +90,8 @@
   .edge.hot { stroke: var(--link-hot); stroke-width: 2.5; }
   .edge.thick.hot { stroke-width: 4.5; }
   .edge.faint { opacity: 0.15; }
+  .edge.route { visibility: hidden; }          /* one closet's way up, shown while it's hovered */
+  .edge.route.hot { visibility: visible; }
   .edge-hit { fill: none; stroke: transparent; stroke-width: 12; cursor: help; }
   .count { font: 600 10px var(--sans); fill: var(--ink-2); paint-order: stroke; stroke: var(--surface); stroke-width: 3; }
   .node { cursor: pointer; }
@@ -338,20 +340,36 @@
     var clusterOf = {}, clusters = {};
     access.forEach(function (n) {
       if (clusterOf[n.id]) return;
-      var seen = {}, queue = [n.id], members = [], attach = {};
+      var seen = {}, queue = [n.id], members = [];
       seen[n.id] = true;
       while (queue.length) {
         var id = queue.shift();
         members.push(id);
         adj[id].forEach(function (m) {
-          if (isAccess(m)) { if (!seen[m]) { seen[m] = true; queue.push(m); } }
-          else attach[m] = true;
+          if (isAccess(m) && !seen[m]) { seen[m] = true; queue.push(m); }
         });
       }
-      var key = Object.keys(attach).sort().join("|");
-      members.forEach(function (m) {                // one group per building under the same switches
-        var k = key + "#" + (byId[m].building || "");
-        var c = clusters[k] || (clusters[k] = { key: k, attach: Object.keys(attach), members: [] });
+      // One group per building. Each group hangs off only the switches its own closets link to, so no line is drawn
+      // to a switch it doesn't reach. A closet with no uplink of its own goes with the closet it's chained behind.
+      var owner = {}, wave = [];
+      members.forEach(function (m) {
+        if (adj[m].some(function (x) { return !isAccess(x); })) { owner[m] = byId[m].building || ""; wave.push(m); }
+      });
+      if (!wave.length) members.forEach(function (m) { owner[m] = byId[m].building || ""; });
+      while (wave.length) {
+        var at = wave.shift();
+        adj[at].forEach(function (m) {
+          if (isAccess(m) && owner[m] === undefined) { owner[m] = owner[at]; wave.push(m); }
+        });
+      }
+      var ups = {};
+      members.forEach(function (m) {
+        var u = ups[owner[m]] = ups[owner[m]] || {};
+        adj[m].forEach(function (x) { if (!isAccess(x)) u[x] = true; });
+      });
+      members.forEach(function (m) {
+        var up = Object.keys(ups[owner[m]]).sort(), k = up.join("|") + "#" + owner[m];
+        var c = clusters[k] || (clusters[k] = { key: k, attach: up, members: [] });
         clusterOf[m] = c; c.members.push(m);
       });
     });
@@ -503,6 +521,19 @@
       if (l) { h.addEventListener("mouseenter", function (e) { tipLink(e, l); }); h.addEventListener("mousemove", moveTip);
                h.addEventListener("mouseleave", hideTip); }
     }
+    // A path through points with its corners rounded a little
+    function route(pts) {
+      var d = "M" + pts[0][0] + "," + pts[0][1];
+      for (var i = 1; i < pts.length; i++) {
+        var p = pts[i], prev = pts[i - 1], next = pts[i + 1];
+        if (!next) { d += " L" + p[0] + "," + p[1]; break; }
+        var r = Math.min(6, Math.abs(p[0] - prev[0] + p[1] - prev[1]) / 2, Math.abs(next[0] - p[0] + next[1] - p[1]) / 2);
+        var ax = p[0] - Math.sign(p[0] - prev[0]) * r, ay = p[1] - Math.sign(p[1] - prev[1]) * r;
+        var bx = p[0] + Math.sign(next[0] - p[0]) * r, by = p[1] + Math.sign(next[1] - p[1]) * r;
+        d += " L" + ax + "," + ay + " Q" + p[0] + "," + p[1] + " " + bx + "," + by;
+      }
+      return d;
+    }
     function line(d, cls, ends, l) {
       var p = svg("path", { d: d, "class": cls }, edges);
       p.dataset.ends = ends.join(" ");
@@ -544,7 +575,6 @@
     var groups = [];
     Object.keys(L.clusters).forEach(function (k) {
       var c = L.clusters[k];
-      var everyone = c.members.concat(c.attach);
       var cols = {};
       if (c.collapsed) {
         // The whole closet group as one box: drawn with the switches, joined like one switch
@@ -574,7 +604,7 @@
         // Closets straight off the core (no distribution) are reached by a path around the distribution row
         var xs = spineXs.concat(c.viaCore ? [] : c.attach.map(mid));
         var busL = Math.min.apply(null, xs), busR = Math.max.apply(null, xs);
-        if (busR > busL) line("M" + busL + "," + busY + " L" + busR + "," + busY, "edge", everyone);
+        if (busR > busL) line("M" + busL + "," + busY + " L" + busR + "," + busY, "edge", c.attach);
         c.attach.forEach(function (up) {
           var top = P[up].y + H, x = mid(up);
           var mine = c.members.filter(function (m) { return L.adj[m].indexOf(up) !== -1; });
@@ -597,7 +627,7 @@
         });
         if (onBus.length && c.attach.length) {
           var last = Math.max.apply(null, onBus.map(function (id) { return P[id].y; }));
-          line("M" + sx + "," + busY + " L" + sx + "," + (last + H / 2), "edge", everyone);
+          line("M" + sx + "," + busY + " L" + sx + "," + (last + H / 2), "edge", c.attach);
         }
         ids.forEach(function (id) {
           var mine = c.collapsed ? c.members : [id];
@@ -610,7 +640,15 @@
           var cls = "edge" + (ups.every(function (l) { return l.mac; }) ? " mac" : "") +
                     (ups.some(function (l) { return l.pairs.length > 1; }) ? " thick" : "");
           var y = P[id].y + H / 2;
-          line("M" + sx + "," + y + " L" + P[id].x + "," + y, cls, mine.concat(c.attach), c.collapsed ? null : ups[0]);
+          var tops = ups.map(function (l) { return mine.indexOf(l.a) !== -1 ? l.b : l.a; });
+          line("M" + sx + "," + y + " L" + P[id].x + "," + y, cls, mine.concat(tops), c.collapsed ? null : ups[0]);
+          // Its own way up, shown only while it's hovered: along its tick, up its column, along the bus to where
+          // the line to the switch above comes down (the shared bus and columns don't light up for every closet)
+          tops.forEach(function (up) {
+            if (!P[up]) return;
+            var dropX = c.viaCore ? (L.noDist ? (busL + busR) / 2 : busL) : mid(up);
+            line(route([[P[id].x, y], [sx, y], [sx, busY], [dropX, busY]]), "edge route", mine);
+          });
         });
       });
     });
@@ -619,17 +657,29 @@
       if (handled[l.a + "|" + l.b]) return;
       var a = byId[l.a], b = byId[l.b];
       if (!(layerOf(a) === "access" && layerOf(b) === "access")) return;
-      var pa = P[l.a], pb = P[l.b];
-      if (!pa || !pb) return;                                                   // inside a collapsed group
-      var top = pa.y <= pb.y ? pa : pb, bot = pa.y <= pb.y ? pb : pa;
+      var ga = L.clusterOf[l.a], gb = L.clusterOf[l.b];
+      if (ga === gb && ga && ga.collapsed) return;                              // both inside one collapsed group
+      var pa = P[l.a] || (ga && ga.collapsed && P[ga.group.id]), pb = P[l.b] || (gb && gb.collapsed && P[gb.group.id]);
+      if (!pa || !pb) return;
       var d;
-      if (top.x === bot.x) {
-        var rx = top.x + W, bend = Math.min(26, 10 + (bot.y - top.y) / 8);
+      if (pa.x === pb.x) {                       // same column: a loop on its right, inside the gap
+        var top = pa.y <= pb.y ? pa : pb, bot = pa.y <= pb.y ? pb : pa;
+        var rx = top.x + W, bend = Math.min(14, 6 + (bot.y - top.y) / 10);
         d = "M" + rx + "," + (top.y + H / 2) + " C" + (rx + bend) + "," + (top.y + H / 2) + " " + (rx + bend) + "," +
             (bot.y + H / 2) + " " + rx + "," + (bot.y + H / 2);
       } else {
-        d = "M" + (top.x + W / 2) + "," + (top.y + H) + " C" + (top.x + W / 2) + "," + (top.y + H + 40) + " " +
-            (bot.x + W / 2) + "," + (bot.y - 40) + " " + (bot.x + W / 2) + "," + bot.y;
+        // Out of the left one's right side, down (or up) the gap next to it, along the gap between rows, down the gap
+        // next to the right one and into its left side, below the tick from its column line: never across a switch
+        var lc = pa.x < pb.x ? pa : pb, rc = pa.x < pb.x ? pb : pa;
+        var y0 = lc.y + H / 2, x1 = lc.x + W + 7, cx = rc.x + W / 2;
+        var nextTo = rc.x - (lc.x + W) <= Math.max(COL_GAP, CLUSTER_GAP) + 1;
+        if (rc.y === lc.y && nextTo) {          // side by side: straight across, just under the tick
+          d = "M" + (lc.x + W) + "," + (y0 + 9) + " L" + rc.x + "," + (y0 + 9);
+        } else {
+          // the gap above it if it's lower, otherwise the gap under its row (never the strip with the building names)
+          var gy = rc.y > lc.y ? rc.y - ROW_GAP / 2 : rc.y + H + ROW_GAP / 2;
+          d = route([[lc.x + W, y0], [x1, y0], [x1, gy], [cx, gy], [cx, rc.y > lc.y ? rc.y : rc.y + H]]);
+        }
       }
       line(d, linkClass(l), [l.a, l.b], l);
     });
