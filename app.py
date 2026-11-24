@@ -762,6 +762,92 @@ def network_page(name):
     return Response(path.read_text(encoding="utf-8"), mimetype="text/html")
 
 
+# The latest map's ideas for the switch list: switches it found that aren't on it, and ones that seem to have moved
+def _list_index(rows):
+    return {r["address"].lower() for r in rows}, {r["name"].lower(): r for r in rows if r.get("name")}
+
+
+def _annotated_suggestions():
+    found = network.load_suggestions(NETWORK_DIR)
+    if not found:
+        return None
+    addresses, names = _list_index(load_switches())
+    for item in found.get("add", []):
+        same_name = names.get(item["name"].lower())
+        item["status"] = ("on_list" if item["address"].lower() in addresses
+                          else "name_on_list" if same_name else "new")
+        item["listed_as"] = same_name["address"] if same_name else ""
+    for item in found.get("fix", []):
+        item["status"] = ("done" if item["new"].lower() in addresses and item["old"].lower() not in addresses
+                          else "taken" if item["new"].lower() in addresses
+                          else "gone" if item["old"].lower() not in addresses else "ready")
+    for item in found.get("gone", []):
+        item["status"] = "on_list" if item["address"].lower() in addresses else "gone"
+    return found
+
+
+@app.get("/api/network/suggestions")
+def network_suggestions():
+    return jsonify({"suggestions": _annotated_suggestions(), "types": sw.TYPES})
+
+
+@app.post("/api/network/suggestions/apply")
+def network_suggestions_apply():
+    """Add the found switches you ticked, and change the addresses you ticked. Only what the latest map suggested,
+    and never something that would clash with the list: an address or a name that's already on it."""
+    payload = request.json or {}
+    found = network.load_suggestions(NETWORK_DIR) or {}
+    offered_add = {i["address"]: i for i in found.get("add", [])}
+    offered_fix = {(i["old"], i["new"]) for i in found.get("fix", [])}
+    settings = load_settings()
+    added, fixed, skipped = [], [], []
+    with switches_lock:
+        rows = load_switches()
+        addresses, names = _list_index(rows)
+        for want in payload.get("add") or []:
+            item = offered_add.get(str((want or {}).get("address", "")))
+            if not item:
+                continue
+            vtype = sw.clean_type(str(want.get("type", item["type"]) or ""))     # (you can change the type it guessed)
+            if not vtype:
+                skipped.append(f"{item['name']} ({item['address']}): pick its type.")
+                continue
+            if item["address"].lower() in addresses:
+                skipped.append(f"{item['name']} ({item['address']}): that address is already on your list.")
+                continue
+            if item["name"].lower() in names:
+                skipped.append(f"{item['name']} ({item['address']}): a switch called {item['name']} is already on your "
+                               f"list, at {names[item['name'].lower()]['address']}.")
+                continue
+            same_type = [r["protocol"] for r in rows if r["type"] == vtype]       # how you reach this kind of switch
+            protocol = max(set(same_type), key=same_type.count) if same_type else \
+                sw.clean_protocol(settings.get("default_protocol")) or "telnet"
+            building = " ".join(str(want.get("building", item.get("building", ""))).split())[:80]
+            rows.append({"address": item["address"], "type": vtype, "protocol": protocol, "building": building,
+                         "location": "", "name": item["name"][:80]})
+            addresses.add(item["address"].lower())
+            names[item["name"].lower()] = rows[-1]
+            added.append(item["name"])
+        for want in payload.get("fix") or []:
+            old, new = str((want or {}).get("old", "")), str((want or {}).get("new", ""))
+            if (old, new) not in offered_fix:
+                continue
+            row = next((r for r in rows if r["address"].lower() == old.lower()), None)
+            if row is None:
+                skipped.append(f"{old} isn't on your list any more.")
+            elif new.lower() in addresses:
+                skipped.append(f"{new} is already on your list, so {row['name'] or old} wasn't changed to it.")
+            else:
+                row["address"] = new
+                addresses.discard(old.lower())
+                addresses.add(new.lower())
+                fixed.append(f"{row['name'] or new}: {old} -> {new}")
+        if added or fixed:
+            save_switches(rows)
+    return jsonify({"ok": True, "added": added, "fixed": fixed, "skipped": skipped,
+                    "suggestions": _annotated_suggestions()})
+
+
 @app.get("/network/demo")
 def network_demo():
     _, html, _ = network.run_demo()

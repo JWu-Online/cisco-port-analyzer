@@ -299,6 +299,28 @@ def demo_map():
     ok &= check("mapping one building: a core on the list under another address is matched by its name",
                 core1 and core1["on_list"] and core1["address"] == "10.0.0.100" and core1["layer"] == "core", core1)
 
+    sg = data["suggestions"]
+    ok &= check("ideas for the switch list: the two switches it found, with a type from their model",
+                [(a["name"], a["address"], a["type"], a["building"]) for a in sg["add"]] ==
+                [("C5-IDF-2", "10.0.3.16", "cisco_ios", "C Building"), ("E9-IDF", "10.0.5.19", "cisco_ios", "")]
+                and sg["fix"] == [] and sg["gone"] == [], sg)
+    sg = b4["suggestions"]
+    ok &= check("a switch it couldn't log into that its neighbors see elsewhere: change its address",
+                sg["fix"] == [{"name": "B4-IDF", "old": "10.9.9.15", "new": "10.0.2.15", "seen_by": ["CORE-1"],
+                               "problem": "login failed (check the username and password)"}], sg["fix"])
+    lonely = ND.demo_results()
+    lonely.append({"switch": {"address": "10.0.9.9", "type": "cisco_ios", "protocol": "telnet", "building": "B Building",
+                              "location": "B9 IDF", "name": "B9-IDF"}, "outputs": None, "problem": "timed out"})
+    ok &= check("a switch on the list nothing answers for and nobody sees: maybe gone",
+                N.build_map(lonely, {}, "test")["suggestions"]["gone"] ==
+                [{"name": "B9-IDF", "address": "10.0.9.9", "problem": "timed out"}])
+    ok &= check("its type from a model or a description",
+                [N.guess_type(m) for m in ("WS-C2960X-48FPD-L", "C9300-48P", "N7K-C7010", "Cisco Nexus Operating System "
+                                           "(NX-OS) Software", "PowerConnect 5548P", "ArubaOS (MODEL: ArubaS3500-48P)",
+                                           "Cisco IOS Software, C3850 Software", "Aruba 2930F", "ISR4451-X/K9", "")]
+                == ["cisco_ios", "cisco_ios", "cisco_nxos", "cisco_nxos", "dell_powerconnect", "aruba_mas", "cisco_ios",
+                    "", "", ""])
+
     moved = N.build_map(ND.demo_results(), {"10.0.2.27": "distribution"}, "test", also_draw=nets)
     sw4507 = next(n for n in moved["nodes"] if n["name"] == "B127-4507")
     ok &= check("a layer you pick wins, and automatic is remembered",
@@ -400,6 +422,49 @@ def full_run():
     # (the pretend switches answer on 127.0.0.1, so CDP's 10.0.2.15 for the switch that refused the login doesn't
     # match its address on the list; its name on the list does)
     ok &= check("no passwords in the page", b"sw-pass" not in page.data and b"core-pass" not in page.data)
+
+    print("\nUpdating the switch list from the map")
+    sg = client.get("/api/network/suggestions", **base).json["suggestions"]
+    b4_row = next(r for r in rows if r["name"] == "B4-IDF")
+    ok &= check("found switches offered, and the one whose neighbors see it elsewhere",
+                [(a["name"], a["status"]) for a in sg["add"]] == [("C5-IDF-2", "new"), ("E9-IDF", "new")]
+                and [(f["name"], f["old"], f["new"], f["status"]) for f in sg["fix"]]
+                == [("B4-IDF", b4_row["address"], "10.0.2.15", "ready")] and sg["page"] == job["report_file"], sg)
+    before = client.get("/api/state", **base).json["switches"]
+    r = client.post("/api/network/suggestions/apply", json={"add": [{"address": "10.0.5.19", "type": "", "building": "E"},
+                                                                     {"address": "10.0.3.16"}, {"address": "10.9.9.9"}],
+                                                             "fix": [{"old": "1.2.3.4", "new": "10.0.2.15"}]}, **base)
+    ok &= check("added what was ticked; a type is still needed; things it didn't suggest ignored",
+                r.json["added"] == ["C5-IDF-2"] and r.json["fixed"] == []
+                and r.json["skipped"] == ["E9-IDF (10.0.5.19): pick its type."], r.json)
+    r = client.post("/api/network/suggestions/apply", json={"add": [{"address": "10.0.5.19", "type": "cisco_ios",
+                                                                      "building": "  E   Building "},
+                                                                     {"address": "10.0.3.16", "type": "cisco_ios"}],
+                                                             "fix": [{"old": b4_row["address"], "new": "10.0.2.15"}]},
+                    **base)
+    after = {s["address"]: s for s in client.get("/api/state", **base).json["switches"]}
+    ok &= check("then the other one, and the moved switch's address; the one already added is not added twice",
+                r.json["added"] == ["E9-IDF"] and r.json["fixed"] == [f"B4-IDF: {b4_row['address']} -> 10.0.2.15"]
+                and r.json["skipped"] == ["C5-IDF-2 (10.0.3.16): that address is already on your list."]
+                and len(after) == len(before) + 2, r.json)
+    ok &= check("new rows: its name, type, the building it's in, the same connection as switches of its type",
+                after["10.0.3.16"] == {"address": "10.0.3.16", "type": "cisco_ios", "protocol": "telnet",
+                                       "building": "C Building", "location": "", "name": "C5-IDF-2"}
+                and after["10.0.5.19"]["building"] == "E Building"
+                and "10.0.2.15" in after and b4_row["address"] not in after
+                and after["10.0.2.15"]["name"] == "B4-IDF" and after["10.0.2.15"]["location"] == b4_row["location"],
+                (after.get("10.0.3.16"), after.get("10.0.5.19")))
+    sg = r.json["suggestions"]
+    ok &= check("and the ideas now say so", [a["status"] for a in sg["add"]] == ["on_list", "on_list"]
+                and sg["fix"][0]["status"] == "done", sg)
+    found = N.load_suggestions(webapp.NETWORK_DIR)
+    found["add"].append({"address": "10.0.7.7", "name": "CORE-2", "model": "N7K-C7010", "type": "cisco_nxos",
+                         "building": "", "seen_by": ["CORE-1"]})
+    (webapp.NETWORK_DIR / "suggestions.json").write_text(json.dumps(found), encoding="utf-8")
+    ok &= check("a name already on the list (at another address) isn't offered as new",
+                client.get("/api/network/suggestions", **base).json["suggestions"]["add"][-1]["status"] == "name_on_list")
+    r = client.post("/api/network/suggestions/apply", json={"add": [{"address": "10.0.7.7"}]}, **base)
+    ok &= check("and isn't added", r.json["added"] == [] and "already on your list" in r.json["skipped"][0], r.json)
 
     core1 = by["CORE-1"]["id"]
     r = client.post("/api/network/layer", json={"id": core1, "layer": "distribution"}, **base)

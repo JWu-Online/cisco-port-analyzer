@@ -15,6 +15,19 @@
     .layers { display: grid; grid-template-columns: max-content 1fr; gap: 4px 18px; margin: 10px 0 0; font-size: 0.9rem; }
     .layers dt { font-weight: 600; }
     .layers dd { margin: 0; color: var(--ink-2); }
+    .suggest h3 { font-size: 1rem; margin: 18px 0 4px; }
+    .suggest h3:first-child { margin-top: 0; }
+    .suggest .tbl { overflow-x: auto; margin-top: 8px; }
+    .suggest table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    .suggest th { text-align: left; font-weight: 600; color: var(--ink-2); padding: 6px 8px; border-bottom: 1px solid var(--line);
+                  white-space: nowrap; }
+    .suggest td { padding: 5px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+    .suggest td select, .suggest td input[type=text] { padding: 4px 6px; font-size: 0.88rem; min-width: 150px; }
+    .suggest tr.off td { color: var(--ink-3); }
+    .suggest .state { font-size: 0.82rem; font-weight: 600; color: var(--found); white-space: nowrap; }
+    .suggest .state.warn { color: var(--check); }
+    .suggest .gone { margin: 6px 0 0; padding-left: 18px; color: var(--ink-2); font-size: 0.9rem; }
+    .suggest-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 16px; }
   </style>
 </head>
 <body>
@@ -68,6 +81,19 @@
         <ol class="log mono" id="log" aria-live="polite"></ol>
       </section>
     </div>
+
+    <section class="panel suggest" id="suggestPanel" aria-labelledby="suggestTitle" hidden>
+      <div class="panel-head">
+        <h2 id="suggestTitle">Update your switch list</h2>
+        <p id="suggestIntro"></p>
+      </div>
+      <div id="suggestBody"></div>
+      <div class="suggest-actions">
+        <button class="btn primary" id="applyBtn" type="button">Update the switch list</button>
+        <span class="hint" id="applyHint"></span>
+      </div>
+      <div class="notice" id="applyResult" hidden></div>
+    </section>
 
     <section class="panel" aria-labelledby="pagesTitle">
       <div class="panel-head">
@@ -196,6 +222,8 @@
       if (data.state === "done" && data.report_file) {
         state.fresh = data.report_file;
         await loadRuns();
+        $("#applyResult").hidden = true;
+        await loadSuggestions();
         window.open("/network/page/" + encodeURIComponent(data.report_file), "_blank", "noopener");
       }
     }
@@ -219,6 +247,167 @@
       poll();
     }
 
+    // ---- what the latest map found for the switch list ----
+    var picks = { add: {}, fix: {} };                  // what's ticked, by address / old address
+    function refreshSwitches() {
+      return api("/api/state").then(function (r) {
+        if (r.data && r.data.switches) { state.switches = r.data.switches; renderScope(); }
+      });
+    }
+    function stateCell(text, warn) { return el("span", { "class": "state" + (warn ? " warn" : "") }, text); }
+    function renderSuggestions(sg, types) {
+      var panel = $("#suggestPanel"), body = $("#suggestBody");
+      body.textContent = "";
+      var add = (sg && sg.add) || [], fix = (sg && sg.fix) || [], gone = (sg && sg.gone) || [];
+      panel.hidden = !(add.length || fix.length || gone.length);
+      if (panel.hidden) return;
+      $("#suggestIntro").textContent = "From the map drawn " + sg.drawn + " · " + sg.scope + ". Tick what to change; " +
+        "nothing on your list is replaced, and an address or name that's already on it is never added twice.";
+      picks = { add: {}, fix: {} };
+
+      if (add.length) {
+        body.appendChild(el("h3", {}, "Switches the map found that aren't on your list (" + add.length + ")"));
+        body.appendChild(el("p", { "class": "hint" }, "Their neighbors reported them" + (sg.ranges ? " in " + sg.ranges : "") +
+          ". They're added with the same connection (SSH or telnet) as your other switches of that type; their " +
+          "location fills in from the switch the first time it's read."));
+        var t = el("table"), head = el("tr");
+        ["", "Name", "Address", "Model", "Type", "Building", "Seen by"].forEach(function (h) { head.appendChild(el("th", {}, h)); });
+        t.appendChild(head);
+        add.forEach(function (item) {
+          var tr = el("tr");
+          var open = item.status === "new";
+          var box = el("input", { type: "checkbox", "aria-label": "Add " + item.name });
+          var tsel = el("select", { "aria-label": "Type of " + item.name });
+          tsel.appendChild(el("option", { value: "" }, "Pick a type"));
+          Object.keys(types).forEach(function (k) { tsel.appendChild(el("option", { value: k }, types[k])); });
+          tsel.value = item.type || "";
+          var bld = el("input", { type: "text", "aria-label": "Building of " + item.name, placeholder: "Building" });
+          bld.value = item.building || "";
+          var cell = el("td");
+          if (open) {
+            box.checked = !!item.type;
+            cell.appendChild(box);
+            var pick = { type: tsel.value, building: bld.value, box: box, item: item };
+            picks.add[item.address] = pick;
+            box.addEventListener("change", buttonText);
+            tsel.addEventListener("change", function () { pick.type = tsel.value; if (tsel.value) box.checked = true; buttonText(); });
+            bld.addEventListener("input", function () { pick.building = bld.value; });
+          } else {
+            tr.className = "off";
+            cell.appendChild(stateCell(item.status === "on_list" ? "On your list" : "Name taken", item.status !== "on_list"));
+          }
+          tr.appendChild(cell);
+          tr.appendChild(el("td", {}, item.name));
+          tr.appendChild(el("td", { "class": "mono" }, item.address));
+          tr.appendChild(el("td", {}, item.model));
+          var tcell = el("td"), bcell = el("td");
+          if (open) { tcell.appendChild(tsel); bcell.appendChild(bld); }
+          else if (item.status === "name_on_list") { tcell.textContent = "On your list at " + item.listed_as; tcell.colSpan = 2; }
+          tr.appendChild(tcell);
+          if (open || item.status !== "name_on_list") tr.appendChild(bcell);
+          tr.appendChild(el("td", {}, (item.seen_by || []).join(", ")));
+          t.appendChild(tr);
+        });
+        var wrap = el("div", { "class": "tbl" });
+        wrap.appendChild(t);
+        body.appendChild(wrap);
+      }
+
+      if (fix.length) {
+        body.appendChild(el("h3", {}, "On your list, but its neighbors see it at another address (" + fix.length + ")"));
+        body.appendChild(el("p", { "class": "hint" }, "Couldn't log in at the address on your list, and the switches next to it " +
+          "report it somewhere else. Likely moved or re-addressed. Tick to change its address on your list."));
+        var ft = el("table"), fh = el("tr");
+        ["", "Name", "On your list", "Neighbors see it at", "Seen by", "Why it couldn't be read"].forEach(function (h) {
+          fh.appendChild(el("th", {}, h));
+        });
+        ft.appendChild(fh);
+        fix.forEach(function (item) {
+          var tr = el("tr"), cell = el("td");
+          if (item.status === "ready") {
+            var box = el("input", { type: "checkbox", "aria-label": "Change " + item.name + "'s address" });
+            box.addEventListener("change", buttonText);
+            picks.fix[item.old] = { box: box, item: item };
+            cell.appendChild(box);
+          } else {
+            tr.className = "off";
+            cell.appendChild(stateCell({ done: "Changed", taken: "Address taken", gone: "Not on list" }[item.status] || "",
+                                       item.status !== "done"));
+          }
+          tr.appendChild(cell);
+          tr.appendChild(el("td", {}, item.name));
+          tr.appendChild(el("td", { "class": "mono" }, item.old));
+          tr.appendChild(el("td", { "class": "mono" }, item.new));
+          tr.appendChild(el("td", {}, (item.seen_by || []).join(", ")));
+          tr.appendChild(el("td", { "class": "hint" }, item.problem || ""));
+          ft.appendChild(tr);
+        });
+        var fw = el("div", { "class": "tbl" });
+        fw.appendChild(ft);
+        body.appendChild(fw);
+      }
+
+      var still = gone.filter(function (g) { return g.status === "on_list"; });
+      if (still.length) {
+        body.appendChild(el("h3", {}, "On your list, but nothing answers and no switch sees them (" + still.length + ")"));
+        body.appendChild(el("p", { "class": "hint" }, "They may have been removed or replaced. Check them, and delete " +
+          "the ones that are gone from the switch list on the Port Analyzer page."));
+        var ul = el("ul", { "class": "gone" });
+        still.forEach(function (g) {
+          ul.appendChild(el("li", {}, g.name + (g.name !== g.address ? " (" + g.address + ")" : "") +
+            (g.problem ? ": " + g.problem : "")));
+        });
+        body.appendChild(ul);
+      }
+      buttonText();
+    }
+    function buttonText() {
+      var a = Object.keys(picks.add).filter(function (k) { return picks.add[k].box.checked; }).length;
+      var f = Object.keys(picks.fix).filter(function (k) { return picks.fix[k].box.checked; }).length;
+      var parts = [];
+      if (a) parts.push("add " + plural(a, "switch", "switches"));
+      if (f) parts.push("change " + plural(f, "address", "addresses"));
+      var btn = $("#applyBtn");
+      btn.hidden = !Object.keys(picks.add).length && !Object.keys(picks.fix).length;
+      btn.disabled = !parts.length;
+      btn.textContent = parts.length ? parts.join(" and ").replace(/^./, function (c) { return c.toUpperCase(); }) :
+        "Update the switch list";
+      $("#applyHint").textContent = parts.length ? "" : (btn.hidden ? "" : "Tick what to change.");
+    }
+    async function loadSuggestions() {
+      var r = (await api("/api/network/suggestions")).data || {};
+      state.types = r.types || state.types;
+      renderSuggestions(r.suggestions, state.types || {});
+    }
+    async function applySuggestions() {
+      var body = { add: [], fix: [] };
+      Object.keys(picks.add).forEach(function (k) {
+        var p = picks.add[k];
+        if (p.box.checked) body.add.push({ address: k, type: p.type, building: p.building });
+      });
+      Object.keys(picks.fix).forEach(function (k) {
+        var p = picks.fix[k];
+        if (p.box.checked) body.fix.push({ old: p.item.old, new: p.item.new });
+      });
+      $("#applyBtn").disabled = true;
+      var r = await api("/api/network/suggestions/apply", body);
+      var d = r.data || {};
+      var box = $("#applyResult");
+      box.textContent = "";
+      var lines = [];
+      if (d.added && d.added.length) lines.push("Added " + plural(d.added.length, "switch", "switches") + ": " + d.added.join(", ") + ".");
+      if (d.fixed && d.fixed.length) lines.push("Changed " + plural(d.fixed.length, "address", "addresses") + ": " + d.fixed.join("; ") + ".");
+      (d.skipped || []).forEach(function (m) { lines.push("Not done: " + m); });
+      if (d.added && d.added.length) lines.push("Draw the map again to log into them: it may find more switches behind them.");
+      if (!r.ok) lines = (d.problems || ["Couldn't update the switch list."]);
+      box.className = "notice " + (r.ok && !(d.skipped || []).length ? "ok" : "warn");
+      lines.forEach(function (m) { box.appendChild(el("p", {}, m)); });
+      box.hidden = !lines.length;
+      if (d.suggestions !== undefined) renderSuggestions(d.suggestions, state.types || {});
+      await refreshSwitches();
+    }
+    $("#applyBtn").addEventListener("click", applySuggestions);
+
     async function init() {
       var data = (await api("/api/state")).data;
       state.switches = data.switches || [];
@@ -232,6 +421,7 @@
       SwitchPicker.attach($("#scope"));
       renderScope();
       await loadRuns();
+      await loadSuggestions();
       var job = (await api("/api/network/job?since=0")).data;
       if (job && job.state === "running") { state.logNext = 0; poll(); }     // a run started before a reload
     }
