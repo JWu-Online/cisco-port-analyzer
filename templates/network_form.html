@@ -7,9 +7,10 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Crect x='6' y='12' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='13' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='20' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='6' y='19' width='5' height='4' fill='%234A5662'/%3E%3Crect x='13' y='19' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='20' y='19' width='5' height='4' fill='%23D9822B'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/picker.js"></script>
+  <script src="/static/saved.js"></script>
   <style>
     .pages { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-    .pages > li { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+    .pages > li { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; max-width: 520px; }
     .pages > li.fresh a { font-weight: 700; }
     .layers { display: grid; grid-template-columns: max-content 1fr; gap: 4px 18px; margin: 10px 0 0; font-size: 0.9rem; }
     .layers dt { font-weight: 600; }
@@ -73,6 +74,7 @@
         <h2 id="pagesTitle">Maps</h2>
         <p>Saved in your data folder (<span class="mono">data\network\pages</span>). Open one to look around: hover a switch to see its links, click it for the ports and to change its layer.</p>
       </div>
+      <div class="saved-bar" id="savedBar" hidden></div>
       <ul class="pages" id="pages"></ul>
       <p class="empty" id="pagesEmpty">None yet.</p>
       <details class="more">
@@ -143,7 +145,10 @@
 
     // ---- earlier maps ----
     async function loadRuns() {
-      var pages = (await api("/api/network/pages")).data.pages || [];
+      var got = (await api("/api/network/pages")).data || {};
+      var pages = got.pages || [];
+      Saved.bar($("#savedBar"), { kind: "network", total: got.total || 0, shown: pages.length, noun: ["map", "maps"],
+                                  onChange: loadRuns });
       var list = $("#pages");
       list.textContent = "";
       $("#pagesEmpty").hidden = pages.length > 0;
@@ -151,6 +156,8 @@
         var li = el("li", { "class": p.file === state.fresh ? "fresh" : "" });
         li.appendChild(el("a", { "class": "link", href: "/network/page/" + encodeURIComponent(p.file), target: "_blank",
                                   rel: "noopener" }, "Map drawn " + p.created));
+        li.appendChild(Saved.deleteButton({ kind: "network", name: p.file, label: "the map drawn " + p.created,
+                                            onChange: loadRuns }));
         list.appendChild(li);
       });
     }

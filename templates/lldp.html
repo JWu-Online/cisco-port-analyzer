@@ -7,6 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Crect x='6' y='12' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='13' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='20' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='6' y='19' width='5' height='4' fill='%234A5662'/%3E%3Crect x='13' y='19' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='20' y='19' width='5' height='4' fill='%23D9822B'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/picker.js"></script>
+  <script src="/static/saved.js"></script>
   <style>
     .runs { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
     .runs > li { border: 1px solid var(--line-soft); border-radius: 6px; padding: 10px 14px; display: grid; gap: 6px; }
@@ -79,6 +80,7 @@
         <h2 id="runsTitle">Runs</h2>
         <p>Saved in your data folder (<span class="mono">data\lldp</span>). <strong>Open</strong> one to see it switch by switch, or download its CSVs.</p>
       </div>
+      <div class="saved-bar" id="savedBar" hidden></div>
       <ul class="runs" id="runs"></ul>
       <p class="empty" id="runsEmpty">None yet.</p>
       <details class="more">
@@ -157,7 +159,10 @@
                   network: ["switch or router", "switches or routers"], pc: ["computer", "computers"],
                   other: ["other device", "other devices"] };
     async function loadRuns() {
-      var runs = (await api("/api/lldp/runs")).data.runs || [];
+      var got = (await api("/api/lldp/runs")).data || {};
+      var runs = got.runs || [];
+      Saved.bar($("#savedBar"), { kind: "lldp", total: got.total || 0, shown: runs.length, noun: ["run", "runs"],
+                                  onChange: loadRuns });
       var list = $("#runs");
       list.textContent = "";
       $("#runsEmpty").hidden = runs.length > 0;
@@ -165,8 +170,10 @@
         var li = el("li", { "class": r.run === state.fresh ? "fresh" : "" });
         var head = el("div", { "class": "run-head" });
         head.appendChild(el("strong", {}, r.created));
+        var del = Saved.deleteButton({ kind: "lldp", name: r.run, label: "the run from " + r.created, onChange: loadRuns });
         head.appendChild(el("span", { "class": "hint" }, r.scope + " · " + plural(r.switches, "switch", "switches") +
           ", " + plural(r.devices, "device", "devices")));
+        head.appendChild(del);
         li.appendChild(head);
         var kinds = el("div", { "class": "kinds" });
         Object.keys(KINDS).forEach(function (k) {

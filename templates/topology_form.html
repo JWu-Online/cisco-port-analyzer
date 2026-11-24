@@ -7,6 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Crect x='6' y='12' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='13' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='20' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='6' y='19' width='5' height='4' fill='%234A5662'/%3E%3Crect x='13' y='19' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='20' y='19' width='5' height='4' fill='%23D9822B'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/picker.js"></script>
+  <script src="/static/saved.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -59,6 +60,7 @@
         <h2 id="recentTitle">Earlier drawings</h2>
         <p>Saved in your data folder. Each run also remembers what it saw, so a stack that restarted has fewer Unsure ports next time.</p>
       </div>
+      <div class="saved-bar" id="savedBar" hidden></div>
       <ul class="recent" id="recent"></ul>
       <p class="empty" id="recentEmpty">None yet.</p>
     </section>
@@ -121,12 +123,23 @@
       $("#months").value = (state.settings && state.settings.months) || 6;
       $("#user").value = recall("user") || "";
 
-      var pages = (await api("/api/topology/pages")).data.pages || [];
+      await loadPages();
+    }
+
+    // ---- earlier drawings ----
+    async function loadPages() {
+      var got = (await api("/api/topology/pages")).data || {};
+      var pages = got.pages || [];
+      Saved.bar($("#savedBar"), { kind: "topology", total: got.total || 0, shown: pages.length,
+                                  noun: ["drawing", "drawings"], onChange: loadPages });
       $("#recentEmpty").hidden = pages.length > 0;
+      $("#recent").textContent = "";
       pages.forEach(function (p) {
         var li = el("li");
         li.appendChild(el("a", { "class": "link", href: "/topology/page/" + encodeURIComponent(p.file) }, p.name));
         li.appendChild(el("span", { "class": "hint" }, "  " + p.created));
+        li.appendChild(Saved.deleteButton({ kind: "topology", name: p.file, label: p.name + " drawn " + p.created,
+                                            onChange: loadPages }));
         $("#recent").appendChild(li);
       });
     }

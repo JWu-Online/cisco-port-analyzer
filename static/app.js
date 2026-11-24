@@ -449,11 +449,36 @@ async function poll() {
 // ---------------------------------------------------------------- results
 async function loadReport(file, freshRun) {
   const { data } = await api("/api/report" + (file ? `?file=${encodeURIComponent(file)}` : ""));
-  if (!data || !data.file) { state.report = null; state.ports = []; renderResults(); return; }
+  if (!data || !data.file) { state.report = null; state.ports = []; renderResults(); loadSavedReports(); return; }
   state.report = data;
   state.ports = data.ports.map((p, i) => ({ ...p, _i: i }));
   if (freshRun) clearFilters(false);
   renderResults();
+  loadSavedReports();
+}
+
+// ---------------------------------------------------------------- saved reports (open, delete one, delete all)
+async function loadSavedReports() {
+  const { data } = await api("/api/reports");
+  const reports = (data && data.reports) || [];
+  const shown = state.report && state.report.file;
+  // After a delete: if the report on screen was the one deleted, show the newest one left
+  const changed = async name => {
+    if (name === null || name === shown) await loadReport();
+    else await loadSavedReports();
+  };
+  Saved.bar($("#savedBar"), { kind: "reports", total: (data && data.total) || 0, shown: reports.length,
+                              noun: ["report", "reports"], onChange: changed });
+  $("#savedEmpty").hidden = reports.length > 0;
+  $("#savedReports").replaceChildren(...reports.map(r => h("li", {},
+    h("strong", { text: runTime(r.created) }),
+    h("span", { class: "what", text: [r.scope, r.months ? `unused for ${r.months}+ months` : ""].filter(Boolean).join(" · ") }),
+    r.file === shown ? h("span", { class: "showing", text: "Showing above" })
+      : h("button", { class: "link", text: "Open", onclick: async () => {
+          await loadReport(r.file, true);
+          $("#results").scrollIntoView({ behavior: reduceMotion() ? "auto" : "smooth" });
+        } }),
+    Saved.deleteButton({ kind: "reports", name: r.file, label: `the report from ${r.created}`, onChange: changed }))));
 }
 
 function filtersActive() {
