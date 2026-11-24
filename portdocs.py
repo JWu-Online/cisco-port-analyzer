@@ -29,6 +29,9 @@ import topology
 # ---------------------------------------------------------------------------
 # The MAC address table
 # ---------------------------------------------------------------------------
+# Cisco network-policy profiles (LLDP-MED): 'network-policy profile 10' / ' voice vlan 40 cos 5'
+POLICY_COMMANDS = ("show network-policy profile", "show running-config | section network-policy")
+
 MAC_COMMANDS = {
     "cisco_ios": ("show mac address-table dynamic", "show mac-address-table dynamic"),
     "cisco_nxos": ("show mac address-table dynamic",),
@@ -129,6 +132,27 @@ def _vlan_word(vlan):
     return {"trunk": "Trunk", "routed": "Routed"}.get(vlan, vlan)
 
 
+def parse_network_policies(output):
+    """'show network-policy profile' or the config's 'network-policy profile' sections -> {profile: voice VLAN}."""
+    found, current = {}, None
+    for line in (output or "").splitlines():
+        m = re.match(r"(?i)^\s*network[- ]policy profile\s+(\d+)", line)
+        if m:
+            current = m.group(1)
+            continue
+        m = re.match(r"(?i)^\s*voice vlan\s+(\d+)", line)
+        if m and current and current not in found:
+            found[current] = m.group(1)
+    return found
+
+
+def _policy_vlan(port, policies):
+    """The voice VLAN of the network-policy profile on a Cisco port ('network-policy 10'), or ''."""
+    if not port.get("config") or port.get("vlan") == "trunk":
+        return ""
+    return policies.get(topology.parse_profile(port["config"])["network_policy"], "")
+
+
 def _cisco_tagged(port):
     """A Cisco port's other VLANs, from its config: the voice VLAN, or what a trunk allows."""
     if not port.get("config"):
@@ -139,10 +163,12 @@ def _cisco_tagged(port):
     return [prof["voice_vlan"]] if prof["voice_vlan"] else []
 
 
-def rows_from_stack(data, switch):
-    """Stack topology's page data (Cisco Catalyst or Dell) -> CSV rows, MACs filled in later."""
+def rows_from_stack(data, switch, policies=None):
+    """Stack topology's page data (Cisco Catalyst or Dell) -> CSV rows, MACs filled in later.
+    policies: {network-policy profile: voice VLAN} (Cisco), for ports whose voice VLAN comes from one."""
     rows = []
     names = data.get("vlan_names", {})
+    policies = policies or {}
     for m in data["members"]:
         for p in m["ports"]:
             if p.get("absent"):
@@ -157,7 +183,9 @@ def rows_from_stack(data, switch):
                 "snmp_location": switch.get("snmp_location", ""),
                 "member": m["number"], "port": p["num"], "interface": p["name"], "description": p["desc"],
                 "vlan": _vlan_word(p["vlan"]), "vlan_name": names.get(p["vlan"], ""),
-                "tagged": ", ".join(f"{v} {names[v]}" if v in names else v for v in tagged),
+                # the voice VLAN (with its name), what a trunk carries, or a network-policy's voice VLAN (just
+                # its number)
+                "tagged": ", ".join(f"{v} {names[v]}" if v in names else v for v in tagged) or _policy_vlan(p, policies),
                 "status": status_word(p),
                 "speed": _link(p.get("speed")), "duplex": _link(p.get("duplex")),
                 "result": topology.LABEL[p["activity"]], "last_active": p.get("last_active", ""),
@@ -219,7 +247,9 @@ def document_switch(switch, login, months, timeout=20, history_dir=None, debug_d
             outputs = topology.collect_outputs(switch["address"], switch["protocol"], login, timeout,
                                                lambda msg: None, vendor,
                                                extra={"macs": MAC_COMMANDS[vendor],
-                                                      "location": lambda conn: sw.read_location(conn, vendor)})
+                                                      "location": lambda conn: sw.read_location(conn, vendor),
+                                                      **({"policies": POLICY_COMMANDS} if vendor == "cisco_ios"
+                                                         else {})})
             out["hostname"], out["snmp_location"] = outputs.get("prompt", ""), outputs.get("location", "")
             switch = _with_location(switch, out["snmp_location"])
             history = topology.load_history(history_dir, switch["address"]) if history_dir else None
@@ -229,7 +259,8 @@ def document_switch(switch, login, months, timeout=20, history_dir=None, debug_d
             if history_dir and data["summary"]["total"]:
                 topology.save_history(history_dir, switch["address"], history)
             out["name"] = data["hostname"] or out["name"]
-            rows, mac_output = rows_from_stack(data, switch), outputs.get("macs", "")
+            rows = rows_from_stack(data, switch, parse_network_policies(outputs.get("policies")))
+            mac_output = outputs.get("macs", "")
             if not rows and debug_dir:
                 topology.save_debug(debug_dir, switch["address"], vendor, outputs)
         else:

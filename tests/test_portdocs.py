@@ -126,6 +126,15 @@ def mac_tables():
                                                       ("%SNMP agent not enabled", True), ("", False),
                                                       ("System Location:", False))]
                 == ["E Building 3rd floor", "B2 IDF", "Main MDF", "B Building", "M2 closet", "Library 1st fl", "", "", ""])
+    ok &= check("network-policy profiles: their voice VLAN number, from the show command or the config",
+                P.parse_network_policies("Network Policy Profile 10\n   voice vlan 40 cos 5\n   voice-signaling vlan 41\n"
+                                         "  Interface:\n   GigabitEthernet1/0/5\nNetwork Policy Profile 20\n"
+                                         "   voice vlan dot1p cos 5\n") == {"10": "40"}
+                and P.parse_network_policies("network-policy profile 3\n voice vlan 45 cos 5\n voice-signaling vlan 45\n"
+                                             "network-policy profile 7\n voice vlan 46\n") == {"3": "45", "7": "46"}
+                and P.parse_network_policies("% Invalid input detected at '^' marker.") == {})
+    ok &= check("a port's 'network-policy 10' is read from its config",
+                T.parse_profile(["switchport access vlan 30", "network-policy 10"])["network_policy"] == "10")
     text = P.csv_text([{"description": "=HYPERLINK(\"x\")", "vlan": "20", "tagged": "40 VOICE-PHONES"}])
     ok &= check("text Excel would run as a formula is made harmless", "'=HYPERLINK" in text, text)
     return ok
@@ -141,6 +150,13 @@ def pretend_switches():
             cmds[cmd] = demo[key]
     cmds["show mac address-table dynamic"] = IOS_MACS
     cmds["show running-config | include snmp-server location"] = "snmp-server location E Building 3rd floor E-310\n"
+    # Gi1/0/5 gets its voice VLAN from a network-policy profile instead of 'switchport voice vlan'
+    cmds[T.COMMANDS["config"][0]] = demo["config"].replace(
+        "interface GigabitEthernet1/0/5\n description Lab E-310 PC05\n",
+        "interface GigabitEthernet1/0/5\n description Lab E-310 PC05\n network-policy 10\n")
+    cmds["show network-policy profile"] = ("Network Policy Profile 10\n   voice vlan 40 cos 5\n  Interface:\n"
+                                           "   GigabitEthernet1/0/5\nNetwork Policy Profile 20\n   voice vlan dot1p cos 5\n"
+                                           "  Interface:\n   none\n")
     ios_cli = MockCLI("DEMO-IDF-E3", cmds, start_enabled=False, enable_secret="en-secret")
     ddemo, dcmds = dell_demo_outputs(), {}
     for key, cmd in T.DELL_COMMANDS.items():
@@ -227,6 +243,11 @@ def full_run():
     ok &= check("a row for every front port of both stacks, plus every Nexus and Aruba port",
                 len(rows) == expected + 4 + 4, (len(rows), expected))
 
+    gi5 = by.get(("DEMO-IDF-E3", "Gi1/0/5"), {})
+    ok &= check("Cisco port with a network-policy profile: its voice VLAN, just the number",
+                gi5.get("VLAN") == "30" and gi5.get("Tagged VLANs") == "40", gi5)
+    ok &= check("ports without one stay as they were",
+                sum(1 for k, r in by.items() if k[0] == "DEMO-IDF-E3" and r["Tagged VLANs"] == "40") == 1)
     gi1 = by.get(("DEMO-IDF-E3", "Gi1/0/1"), {})
     ok &= check("Cisco desk port: switch, member, port, description, VLAN name, voice VLAN, MACs",
                 gi1.get("Address") == addr["ios"] and gi1.get("Building") == "E Building"
