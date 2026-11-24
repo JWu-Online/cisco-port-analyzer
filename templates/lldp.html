@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLDP neighbors - Port Analyzer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Crect x='6' y='12' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='13' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='20' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='6' y='19' width='5' height='4' fill='%234A5662'/%3E%3Crect x='13' y='19' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='20' y='19' width='5' height='4' fill='%23D9822B'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/picker.js"></script>
+  <style>
+    .runs { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+    .runs > li { border: 1px solid var(--line-soft); border-radius: 6px; padding: 10px 14px; display: grid; gap: 6px; }
+    .runs > li.fresh { border-color: var(--found); box-shadow: inset 3px 0 0 var(--found); }
+    .run-head { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+    .run-head strong { font-size: 1rem; }
+    .run-links { display: flex; flex-wrap: wrap; gap: 8px; }
+    .run-failed { font-size: 0.85rem; color: var(--danger); margin: 0; padding-left: 18px; }
+    .cols { display: grid; grid-template-columns: max-content 1fr; gap: 4px 18px; margin: 10px 0 0; font-size: 0.9rem; }
+    .cols dt { font-weight: 600; }
+    .cols dd { margin: 0; color: var(--ink-2); }
+    .kinds { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 0.85rem; color: var(--ink-2); }
+    .kinds span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+      margin-right: 5px; background: var(--k); vertical-align: 0; }
+    .k-phone { --k: #2a78d6; } .k-ap { --k: #eb6834; } .k-network { --k: #1baf7a; } .k-pc { --k: #B8C2CC; }
+    .k-other { --k: #7b7a75; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="link" href="/">&larr; Port Analyzer</a>
+    <h1>LLDP neighbors</h1>
+    <p>What's plugged into each port: every phone, access point, switch, computer and other device that tells the switch who it is (LLDP, and CDP on Cisco). See it switch by switch, and get CSVs.</p>
+  </header>
+
+  <main>
+    <div class="setup">
+      <section class="panel" aria-labelledby="whatTitle">
+        <div class="panel-head"><h2 id="whatTitle">Which switches</h2></div>
+        <label class="field"><span>Switches</span><select id="scope"></select></label>
+        <p class="hint" id="scopeHint"></p>
+        <p class="hint">Uses the switch list from the Port Analyzer page. Each switch is asked for its ports and its LLDP
+          neighbors (and CDP neighbors on Cisco). Windows 10 and 11 PCs announce themselves, but with only their computer
+          name or MAC address. A device that sends nothing shows as "link up, nothing said who it is"; the MAC addresses
+          on it are in Port documentation.
+          <a class="link" href="/lldp/demo" target="_blank" rel="noopener">See a made-up building</a></p>
+      </section>
+
+      <section class="panel" aria-labelledby="runTitle">
+        <div class="panel-head">
+          <h2 id="runTitle">Log in and read the neighbors</h2>
+          <p>Passwords are only kept in memory for this run, never saved.</p>
+        </div>
+        <div class="login-grid">
+          <label class="field"><span>Username</span><input id="user" autocomplete="username"></label>
+          <label class="field"><span>Password</span><input id="pass" type="password" autocomplete="current-password"></label>
+          <label class="field"><span>Enable password</span><input id="secret" type="password" autocomplete="off" placeholder="Optional"></label>
+        </div>
+        <label class="check"><input type="checkbox" id="sshDifferent"> <span>SSH switches use a different login</span></label>
+        <div class="login-grid" id="sshLogin" hidden>
+          <label class="field"><span>SSH username</span><input id="sshUser" autocomplete="off"></label>
+          <label class="field"><span>SSH password</span><input id="sshPass" type="password" autocomplete="off"></label>
+          <label class="field"><span>SSH enable password</span><input id="sshSecret" type="password" autocomplete="off" placeholder="Optional"></label>
+        </div>
+        <div class="actions">
+          <button class="btn primary big" id="runBtn">Read neighbors</button>
+          <button class="btn" id="stopBtn" hidden>Stop</button>
+        </div>
+        <div class="notice" id="notes" hidden></div>
+        <div class="progress" id="progressBox" hidden>
+          <div class="progress-line"><span>Reading switches</span><span id="progressCount" class="mono"></span></div>
+          <div class="bar"><div class="fill" id="progressFill"></div></div>
+        </div>
+        <ol class="log mono" id="log" aria-live="polite"></ol>
+      </section>
+    </div>
+
+    <section class="panel" aria-labelledby="runsTitle">
+      <div class="panel-head">
+        <h2 id="runsTitle">Runs</h2>
+        <p>Saved in your data folder (<span class="mono">data\lldp</span>). <strong>Open</strong> one to see it switch by switch, or download its CSVs.</p>
+      </div>
+      <ul class="runs" id="runs"></ul>
+      <p class="empty" id="runsEmpty">None yet.</p>
+      <details class="more">
+        <summary>What's in each CSV</summary>
+        <p class="hint"><strong>Devices</strong>: a row for every device found. <strong>Every port</strong>: a row for every
+          port, with the device columns empty where nothing said who it is (and two rows for a port with two devices).
+          <strong>One CSV per switch</strong>: every port, a file per switch.</p>
+        <dl class="cols">
+          <dt>Switch, Address, Building, Location</dt><dd>The switch's name (from its prompt) and what your switch list says about it.</dd>
+          <dt>Port, Port description, Status, VLAN</dt><dd>The port, its description on the switch, its status in the switch's own words (connected, notconnect, disabled, err-disabled...) and its VLAN (Cisco).</dd>
+          <dt>Connected device, Device type</dt><dd>The name the device gave (its IP, the id it sent or its MAC address if it gave none), and Phone, Access point, Switch or router, Computer (Windows sends just its computer name or MAC) or Other device (a printer, a camera...).</dd>
+          <dt>Device IP, Model / platform</dt><dd>Its management address and what it says it is, like CP-8845 or C9120AXI-B.</dd>
+          <dt>Its port, Capabilities, Device MAC</dt><dd>Its own port that's plugged in, what it says it can do (B bridge, T telephone, W access point, R router...), and its MAC address when it sends one.</dd>
+          <dt>Found by</dt><dd>LLDP, CDP, or CDP + LLDP when the device said it both ways.</dd>
+        </dl>
+      </details>
+    </section>
+  </main>
+
+  <script>
+  (function () {
+    "use strict";
+    var $ = function (s) { return document.querySelector(s); };
+    var state = { switches: [], logNext: 0, timer: null, fresh: "" };
+    function remember(k, v) { try { localStorage.setItem("pa." + k, v); } catch (e) { /* private window */ } }
+    function recall(k) { try { return localStorage.getItem("pa." + k); } catch (e) { return null; } }
+    function el(tag, props, text) {
+      var e = document.createElement(tag);
+      Object.keys(props || {}).forEach(function (k) { e.setAttribute(k, props[k]); });
+      if (text !== undefined) e.textContent = text;
+      return e;
+    }
+    function plural(n, one, many) { return n + " " + (n === 1 ? one : many); }
+    function notice(kind, messages) {
+      var box = $("#notes");
+      box.textContent = "";
+      if (!messages || !messages.length) { box.hidden = true; return; }
+      box.className = "notice " + kind;
+      messages.forEach(function (m) { box.appendChild(el("p", {}, m)); });
+      box.hidden = false;
+    }
+    async function api(path, body) {
+      var opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+      try {
+        var res = await fetch(path, opts);
+        var data = await res.json();
+        return { ok: res.ok && data.ok !== false, data: data };
+      } catch (e) {
+        return { ok: false, data: { problems: ["Can't reach the app. Is the RunAnalyzer window still open?"] } };
+      }
+    }
+
+    // ---- which switches (same choices as the Port Analyzer page) ----
+    function inScope() {
+      var scope = $("#scope").value;
+      if (scope.indexOf("b:") === 0) return state.switches.filter(function (s) { return s.building === scope.slice(2); });
+      if (scope.indexOf("s:") === 0) return state.switches.filter(function (s) { return s.address === scope.slice(2); });
+      return state.switches;
+    }
+    function renderScope() {          // type a name or address to find a switch (static/picker.js)
+      SwitchPicker.fillScope($("#scope"), state.switches, { types: state.types, value: recall("lldpScope") || "" });
+      hint();
+    }
+    function hint() {
+      var chosen = inScope(), kinds = {};
+      chosen.forEach(function (s) { kinds[s.type] = (kinds[s.type] || 0) + 1; });
+      var NAMES = { cisco_ios: "Cisco Catalyst", dell_powerconnect: "Dell", cisco_nxos: "Cisco Nexus", aruba_mas: "Aruba" };
+      var parts = Object.keys(kinds).map(function (k) { return kinds[k] + " " + (NAMES[k] || k); });
+      $("#scopeHint").textContent = state.switches.length
+        ? plural(chosen.length, "switch", "switches") + (parts.length ? ": " + parts.join(", ") : "") + "."
+        : "No switches yet. Add them on the Port Analyzer page under Switch list.";
+    }
+
+    // ---- earlier runs ----
+    var KINDS = { phone: ["phone", "phones"], ap: ["access point", "access points"],
+                  network: ["switch or router", "switches or routers"], pc: ["computer", "computers"],
+                  other: ["other device", "other devices"] };
+    async function loadRuns() {
+      var runs = (await api("/api/lldp/runs")).data.runs || [];
+      var list = $("#runs");
+      list.textContent = "";
+      $("#runsEmpty").hidden = runs.length > 0;
+      runs.forEach(function (r) {
+        var li = el("li", { "class": r.run === state.fresh ? "fresh" : "" });
+        var head = el("div", { "class": "run-head" });
+        head.appendChild(el("strong", {}, r.created));
+        head.appendChild(el("span", { "class": "hint" }, r.scope + " · " + plural(r.switches, "switch", "switches") +
+          ", " + plural(r.devices, "device", "devices")));
+        li.appendChild(head);
+        var kinds = el("div", { "class": "kinds" });
+        Object.keys(KINDS).forEach(function (k) {
+          var n = (r.counts || {})[k] || 0;
+          if (n) kinds.appendChild(el("span", { "class": "k-" + k }, n + " " + KINDS[k][n === 1 ? 0 : 1]));
+        });
+        li.appendChild(kinds);
+        var links = el("div", { "class": "run-links" });
+        links.appendChild(el("a", { "class": "btn primary", href: "/lldp/view/" + r.run, target: "_blank", rel: "noopener" }, "Open"));
+        links.appendChild(el("a", { "class": "btn", href: "/lldp/download/" + r.run + "/devices" }, "Devices CSV"));
+        links.appendChild(el("a", { "class": "btn", href: "/lldp/download/" + r.run + "/ports" }, "Every port CSV"));
+        links.appendChild(el("a", { "class": "btn", href: "/lldp/download/" + r.run + "/zip" }, "One CSV per switch (.zip)"));
+        li.appendChild(links);
+        if (r.failed && r.failed.length) {
+          var ul = el("ul", { "class": "run-failed" });
+          r.failed.forEach(function (f) {
+            ul.appendChild(el("li", {}, "Not read: " + (f.name !== f.address ? f.name + " (" + f.address + ")" : f.address) +
+              ". " + f.problem));
+          });
+          li.appendChild(ul);
+        }
+        list.appendChild(li);
+      });
+    }
+
+    // ---- running ----
+    function setRunning(running) {
+      $("#runBtn").disabled = running;
+      $("#runBtn").textContent = running ? "Reading switches…" : "Read neighbors";
+      $("#stopBtn").hidden = !running;
+      $("#stopBtn").disabled = false;
+      $("#progressBox").hidden = !running;
+    }
+    async function poll() {
+      clearTimeout(state.timer);
+      var data = (await api("/api/lldp/job?since=" + state.logNext)).data;
+      if (!data || !data.state) { state.timer = setTimeout(poll, 2000); return; }
+      var log = $("#log");
+      var atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
+      data.lines.forEach(function (line) {
+        var li = el("li", { "class": line.level });
+        li.appendChild(el("time", {}, line.t));
+        li.appendChild(el("span", {}, line.msg));
+        log.appendChild(li);
+      });
+      if (atBottom) log.scrollTop = log.scrollHeight;
+      state.logNext = data.next;
+      var p = data.progress;
+      $("#progressCount").textContent = p.total ? p.done + " of " + p.total : "";
+      $("#progressFill").style.width = p.total ? Math.round(100 * p.done / p.total) + "%" : "0";
+      if (data.state === "running") { setRunning(true); state.timer = setTimeout(poll, 1000); return; }
+      setRunning(false);
+      if (data.state === "done") {               // names and locations it filled in on the list
+        var fresh = (await api("/api/state")).data;
+        if (fresh && fresh.switches) { state.switches = fresh.switches; renderScope(); }
+      }
+      if (data.state === "done" && data.report_file) {
+        state.fresh = data.report_file;
+        await loadRuns();
+      }
+    }
+    async function start() {
+      remember("user", $("#user").value);
+      remember("sshUser", $("#sshUser").value);
+      remember("lldpScope", $("#scope").value);
+      var body = {
+        scope: $("#scope").value,
+        username: $("#user").value, password: $("#pass").value, secret: $("#secret").value,
+        ssh_different: $("#sshDifferent").checked,
+        ssh_username: $("#sshUser").value, ssh_password: $("#sshPass").value, ssh_secret: $("#sshSecret").value
+      };
+      var r = await api("/api/lldp/run", body);
+      if (!r.ok) { notice("error", r.data.problems || ["Couldn't start."]); return; }
+      notice("", []);
+      $("#log").textContent = "";
+      state.logNext = 0;
+      setRunning(true);
+      poll();
+    }
+
+    async function init() {
+      var data = (await api("/api/state")).data;
+      state.switches = data.switches || [];
+      state.types = data.types || {};
+      $("#user").value = recall("user") || "";
+      $("#sshUser").value = recall("sshUser") || "";
+      $("#sshDifferent").checked = recall("sshDifferent") === "1";
+      $("#sshLogin").hidden = !$("#sshDifferent").checked;
+      SwitchPicker.attach($("#scope"));
+      renderScope();
+      await loadRuns();
+      var job = (await api("/api/lldp/job?since=0")).data;
+      if (job && job.state === "running") { state.logNext = 0; poll(); }     // a run started before a reload
+    }
+
+    $("#scope").addEventListener("change", hint);
+    $("#sshDifferent").addEventListener("change", function () {
+      $("#sshLogin").hidden = !$("#sshDifferent").checked;
+      remember("sshDifferent", $("#sshDifferent").checked ? "1" : "0");
+    });
+    $("#runBtn").addEventListener("click", start);
+    $("#stopBtn").addEventListener("click", function () { $("#stopBtn").disabled = true; api("/api/lldp/stop", {}); });
+    $("#pass").addEventListener("keydown", function (e) { if (e.key === "Enter") start(); });
+    init();
+  })();
+  </script>
+</body>
+</html>

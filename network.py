@@ -122,8 +122,8 @@ def parse_lldp_detail(output):
         local = re.search(r"(?m)^\s*(?:Local Intf|Local Port id)\s*:\s*(\S+)", block)
         if not local:
             continue
-        def field(name):
-            m = re.search(r"(?m)^\s*" + name + r"\s*:\s*(.*?)\s*$", block)
+        def field(name):                          # (an empty field stays empty, not the next line)
+            m = re.search(r"(?m)^[ \t]*" + name + r"[ \t]*:[ \t]*(.*?)[ \t]*$", block)
             return m.group(1) if m else ""
         port, desc = field("Port id"), field("Port Description")
         if not re.search(r"\d", port) or re.fullmatch(r"[0-9a-fA-F.:-]{12,17}", port):
@@ -148,7 +148,7 @@ def parse_lldp_table(output, vendor):
     for line in (output or "").splitlines():
         if vendor == "aruba_mas":
             m = re.match(r"^\s*((?:GE|ge|Pc|pc)\S*\d)\s+(\S+)\s+(" + _CAP_LETTERS + r"(?::" + _CAP_LETTERS + r")*)"
-                         r"\s+(\S+)\s+(\d+)\s+(\S+)", line)
+                         r"\s+(.+?)\s+(\d+)\s+(\S+)\s*$", line)          # (a remote port can have a space)
             if m:
                 found.append({"local": m.group(1), "chassis": m.group(2), "caps": m.group(3).replace(":", ","),
                               "port": m.group(4), "name": short_name(m.group(6)), "ip": "", "platform": "",
