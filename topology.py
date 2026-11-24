@@ -356,7 +356,7 @@ def parse_profile(lines, voice_id=""):
     """
     prof = {"description": "", "mode": "", "access_vlan": "", "voice_vlan": "", "native_vlan": "",
             "allowed": [], "shutdown": False, "portfast": False, "bpduguard": False, "general": False,
-            "tagged": [], "untagged": [], "other": []}
+            "tagged": [], "untagged": [], "other": [], "network_policy": ""}
     for raw in lines or []:
         line = raw.strip()
         low = re.sub(r"\s+", " ", line.lower())
@@ -398,7 +398,10 @@ def parse_profile(lines, voice_id=""):
         elif low in ("spanning-tree bpduguard enable", "spanning-tree bpduguard"):
             prof["bpduguard"] = True
         else:
-            prof["other"].append(line)
+            m = re.fullmatch(r"network-policy (\d+)", low)   # a Cisco LLDP-MED profile (its voice VLAN)
+            if m:
+                prof["network_policy"] = m.group(1)
+            prof["other"].append(line)                     # (still listed as not copied to a Dell)
     if prof["mode"] == "general":
         prof["general"] = True
         tagged, untagged = vlan_set(prof["tagged"]), vlan_set(prof["untagged"])
