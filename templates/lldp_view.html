@@ -7,8 +7,10 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Crect x='6' y='12' width='5' height='4' fill='%232a78d6'/%3E%3Crect x='13' y='12' width='5' height='4' fill='%23eb6834'/%3E%3Crect x='20' y='12' width='5' height='4' fill='%231baf7a'/%3E%3Crect x='6' y='19' width='5' height='4' fill='%234A5662'/%3E%3Crect x='13' y='19' width='5' height='4' fill='%232a78d6'/%3E%3Crect x='20' y='19' width='5' height='4' fill='%234A5662'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/app.css">
   <style>
-    /* Device colors: three categorical slots (validated all-pairs, light and dark), "other" is a neutral gray.
-       Every colored port also carries its letter (P, A, S, O), and every device is in the table under it. */
+    /* Device colors: three categorical slots (validated all-pairs, light and dark); computers and "other" are
+       neutral greys. Every port with a device also carries its letter (P, A, S, C, O), and every device is in
+       the table under it. A computer is the same light grey as "link up, nothing said": both are usually PCs,
+       the C says this one announced itself. */
     :root {
       --k-phone: #2a78d6; --k-ap: #eb6834; --k-network: #1baf7a; --k-other: #8a8984;
       --p-idle: #DCE2E8; --p-glyph: #0b0b0b; --p-err: #d03b3b;
@@ -33,6 +35,7 @@
           font: 700 10px/1 var(--sans); color: var(--p-glyph); }
     .k-phone { background: var(--k-phone); } .k-ap { background: var(--k-ap); }
     .k-network { background: var(--k-network); } .k-other { background: var(--k-other); }
+    .k-pc { background: var(--p-idle); }
     .s-idle { background: var(--p-idle); } .s-off { background: transparent; box-shadow: inset 0 0 0 1px var(--ink-3); }
     .s-shut { background: repeating-linear-gradient(135deg, transparent 0 3px, var(--line) 3px 5px);
               box-shadow: inset 0 0 0 1px var(--ink-3); }
@@ -127,8 +130,9 @@
         <span><i class="sw k-phone">P</i>Phone</span>
         <span><i class="sw k-ap">A</i>Access point</span>
         <span><i class="sw k-network">S</i>Switch or router</span>
-        <span><i class="sw k-other">O</i>Other device (printer, camera, server…)</span>
-        <span><i class="sw s-idle"></i>Link up, nothing said who it is (a PC, usually)</span>
+        <span><i class="sw k-pc">C</i>Computer (Windows sends only its name or MAC)</span>
+        <span><i class="sw k-other">O</i>Other device (printer, camera…)</span>
+        <span><i class="sw s-idle"></i>Link up, nothing said who it is</span>
         <span><i class="sw s-off"></i>No link</span>
         <span><i class="sw s-shut"></i>Shut down</span>
         <span><i class="sw s-err">!</i>Err-disabled</span>
@@ -146,9 +150,10 @@
     "use strict";
     var D = {{ data|tojson }};
     var KINDS = D.kinds;
-    var ORDER = ["phone", "ap", "network", "other"];     // (the data's keys come in alphabetical order)
-    var LETTER = { phone: "P", ap: "A", network: "S", other: "O" };
-    var PLURAL = { phone: "phones", ap: "access points", network: "switches or routers", other: "other devices" };
+    var ORDER = ["phone", "ap", "network", "pc", "other"];    // (the data's keys come in alphabetical order)
+    var LETTER = { phone: "P", ap: "A", network: "S", pc: "C", other: "O" };
+    var PLURAL = { phone: "phones", ap: "access points", network: "switches or routers", pc: "computers",
+                   other: "other devices" };
     var $ = function (s) { return document.querySelector(s); };
     var state = { kinds: {}, q: "", building: "", every: false };
     var built = [];                      // per switch: {s, sec, details, ports: [{p, btn, rows, kinds, text}]}
@@ -208,7 +213,7 @@
     il.appendChild(document.createTextNode("Link up, nothing said who it is"));
     it.appendChild(il);
     it.appendChild(el("span", "value", String(idle)));
-    it.appendChild(el("span", "note", "PCs and the like; their MACs are in Port documentation"));
+    it.appendChild(el("span", "note", "Sends no LLDP (a PC with it off, a Mac…); the MACs are in Port documentation"));
     $("#tiles").appendChild(it);
     $("#totalLine").textContent = plural(total, "device", "devices") + " on " + plural(D.read, "switch", "switches") +
       (D.failed ? " · " + plural(D.failed, "switch", "switches") + " couldn't be read" : "");

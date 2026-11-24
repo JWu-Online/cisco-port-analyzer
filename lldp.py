@@ -3,8 +3,10 @@ LLDP neighbors: what's plugged into each port, on every switch on the list (or o
 
 Each switch is logged into once and asked for its ports (status and description) and for what it hears over
 LLDP, and CDP on Cisco. A neighbor is anything that told the switch who it is: phones, access points, other
-switches and routers, and some printers, cameras and servers. A PC usually says nothing, so its port shows
-as "link up, nothing said who it is" (the MAC addresses on it are in Port documentation).
+switches and routers, computers, and some printers and cameras. Windows 10 and 11 announce themselves with
+their built-in LLDP driver, but only with their computer name (or MAC address) and MAC, nothing else: those
+are "Computer". A device that sends nothing shows as "link up, nothing said who it is" (the MAC addresses
+on it are in Port documentation).
 
 A run is saved in data/lldp/<date-time>/:
     data.json        what the page shows
@@ -41,10 +43,13 @@ COMMANDS = {
 }
 BIG = {"interfaces", "lldp", "cdp"}
 
-KINDS = {"phone": "Phone", "ap": "Access point", "network": "Switch or router", "other": "Other device"}
+KINDS = {"phone": "Phone", "ap": "Access point", "network": "Switch or router", "pc": "Computer",
+         "other": "Other device"}
 KIND_WORDS = {"phone": ("phone", "phones"), "ap": ("access point", "access points"),
-              "network": ("switch or router", "switches or routers"), "other": ("other device", "other devices")}
-_RANK = {"phone": 0, "ap": 1, "network": 2, "other": 3}
+              "network": ("switch or router", "switches or routers"), "pc": ("computer", "computers"),
+              "other": ("other device", "other devices")}
+_RANK = {"phone": 0, "ap": 1, "network": 2, "pc": 3, "other": 4}
+_COMPUTER_OS = re.compile(r"(?i)\bwindows\b|\blinux\b|ubuntu|debian|red ?hat|centos|rocky|fedora|mac ?os|darwin")
 
 # 'show interfaces status' words; switches that only say up/down get the same ones
 _WORDS = {"up": "connected", "down": "notconnect", "notconnec": "notconnect", "xcvrabsen": "xcvrAbsent",
@@ -130,11 +135,18 @@ def _letters(caps):
     return set(re.findall(r"\b([A-Z])\b", text))
 
 
+def _blank(value):
+    """What switches print for a field the device didn't send ('null' on a Nexus) -> ''."""
+    value = (value or "").strip()
+    return "" if re.fullmatch(r"(?i)null|-+|not advertised|n/?a|none", value) else value
+
+
 def kind_of(nb, vendor=""):
-    """phone, ap (access point), network (switch or router) or other, from what the device said about itself."""
-    caps = nb.get("caps") or ""
-    about = f"{nb.get('platform') or ''} {nb.get('model') or ''}"
-    name = nb.get("name") or ""
+    """phone, ap (access point), network (switch or router), pc (computer) or other, from what the device
+    said about itself."""
+    caps = _blank(nb.get("caps"))
+    about = f"{_blank(nb.get('platform'))} {_blank(nb.get('model'))}".strip()
+    name = _blank(nb.get("name"))
     if nb.get("source") == "CDP":
         words = caps.lower()
         if "phone" in words or re.search(r"(?i)phone", about):
@@ -150,6 +162,11 @@ def kind_of(nb, vendor=""):
         return "ap"
     if letters & {"B", "R"}:
         return "network"
+    if _COMPUTER_OS.search(about):
+        return "pc"
+    # Windows' own LLDP driver sends an id (its computer name or MAC) and its MAC, and nothing else
+    if not (name or about or caps or _blank(nb.get("ip"))) and nb.get("source") == "LLDP":
+        return "pc"
     return "other"
 
 
@@ -169,7 +186,7 @@ def _sep_mac(name):
 
 
 def _same_device(a, b):
-    if a["name"] and a["name"].lower() == b["name"].lower():
+    if _blank(a["name"]) and _blank(a["name"]).lower() == _blank(b["name"]).lower():
         return True
     if a["ip"] and a["ip"] == b["ip"]:
         return True
@@ -187,9 +204,11 @@ def merge(found):
             out.append({**nb, "sources": {nb["source"]}})
         else:
             _fold(same, nb)
-    # One by CDP and one by LLDP, and nothing to match them on: the same device, said two ways
-    if len(out) == 2 and out[0]["sources"] != out[1]["sources"] and len(out[0]["sources"] | out[1]["sources"]) == 2 \
-            and not (out[0]["name"] and out[1]["name"]):
+    # One by CDP and one by LLDP, the same kind, and nothing else to match them on: the same device, said two
+    # ways. (A phone and the PC behind it are two kinds, so they stay two.)
+    if len(out) == 2 and len(out[0]["sources"]) == len(out[1]["sources"]) == 1 \
+            and out[0]["sources"] != out[1]["sources"] and out[0]["kind"] == out[1]["kind"] \
+            and not (_blank(out[0]["name"]) and _blank(out[1]["name"])):
         _fold(out[0], out.pop())
     return out
 
@@ -207,12 +226,14 @@ def _fold(into, nb):
 
 def _device(nb):
     """A neighbor as the page and the CSVs show it."""
-    mac = _mac(nb["chassis"]) or _sep_mac(nb["name"])
-    model = (nb.get("model") or nb.get("platform") or "").strip()
+    name, chassis, port = _blank(nb["name"]), _blank(nb["chassis"]), _blank(nb["port"])
+    mac = _mac(chassis) or _sep_mac(name) or _mac(port)
+    model = _blank(nb.get("model")) or _blank(nb.get("platform"))
     model = re.sub(r"(?i)^cisco\s+", "", model)
-    return {"name": nb["name"] or nb["ip"] or mac or model or "(no name)", "ip": nb["ip"], "model": model[:80],
-            "their_port": nb["port"], "caps": nb["caps"], "mac": mac, "kind": nb["kind"],
-            "found_by": " + ".join(sorted(nb["sources"]))}
+    # No name sent: its IP, or the id it sent when that's a name (Windows sends its computer name), or its MAC
+    shown = name or nb["ip"] or (chassis if chassis and not _mac(chassis) else "") or mac or model or "(no name)"
+    return {"name": shown, "ip": nb["ip"], "model": model[:80], "their_port": port, "caps": _blank(nb["caps"]),
+            "mac": mac, "kind": nb["kind"], "found_by": " + ".join(sorted(nb["sources"]))}
 
 
 def neighbors_from(outputs, vendor):

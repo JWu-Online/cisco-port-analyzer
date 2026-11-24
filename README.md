@@ -149,11 +149,11 @@ The CSVs are saved in `data\docs\<date-time>\`, and earlier runs stay listed on 
 
 ## LLDP neighbors
 
-Click **LLDP neighbors** at the top of the page to see **what's plugged into each port**: every phone, access point, switch, router and other device that tells the switch who it is over LLDP (and CDP, on Cisco). Pick the switches (all of them, one building or one switch), enter the login like on the main page and click **Read neighbors**. Each switch is logged into once, several at a time. **See a made-up building** shows the page without logging in anywhere.
+Click **LLDP neighbors** at the top of the page to see **what's plugged into each port**: every phone, access point, switch, router, computer and other device that tells the switch who it is over LLDP (and CDP, on Cisco). Pick the switches (all of them, one building or one switch), enter the login like on the main page and click **Read neighbors**. Each switch is logged into once, several at a time. **See a made-up building** shows the page without logging in anywhere.
 
 Each run is saved in `data\lldp\` and listed on the page. **Open** shows it:
-- **Totals** by type: phones, access points, switches or routers, other devices (printers, cameras, servers...), and ports with a link where nothing said who it is. Click a total to show only that type.
-- **Every switch drawn like its front**: odd ports on top, even below, one square per port. A colored square with a letter is a device (**P** phone, **A** access point, **S** switch or router, **O** other); grey is a link with nothing that said who it is (usually a PC); an empty square is no link; striped is shut down; a red **!** is err-disabled. Hover a port to see what's on it; click it to jump to its row.
+- **Totals** by type: phones, access points, switches or routers, computers, other devices (printers, cameras...), and ports with a link where nothing said who it is. Click a total to show only that type.
+- **Every switch drawn like its front**: odd ports on top, even below, one square per port. A colored square with a letter is a device (**P** phone, **A** access point, **S** switch or router, **O** other); light grey with a **C** is a computer; plain light grey is a link with nothing that said who it is; an empty square is no link; striped is shut down; a red **!** is err-disabled. Hover a port to see what's on it; click it to jump to its row.
 - **Under each switch, the list**: port, description, status, device, type, IP, model, its port and whether LLDP or CDP (or both) found it. **List every port** adds the ports with nothing on them.
 - **Building** and **Find** (a switch, port, description, device name, IP, model or MAC) narrow it down. **Print / Save PDF** prints what's showing.
 
@@ -164,7 +164,7 @@ Three CSVs come with each run:
 
 Columns: Switch, Address, Building, Location, Port, Port description, Status (the switch's own words: connected, notconnect, disabled, err-disabled...), VLAN, Connected device, Device type, Device IP, Model / platform, Its port, Capabilities, Device MAC, Found by.
 
-Good to know: a PC usually doesn't send LLDP, so its port is grey; the MAC addresses on it are in Port documentation. A Cisco phone or access point usually answers both CDP and LLDP; it's listed once, as "CDP + LLDP". If a switch gives nothing at all, LLDP may be off on it (`lldp run` on a Catalyst). Dell and Aruba switches only give a short LLDP table, so their devices have no IP or model.
+Good to know: Windows 10 and 11 have a built-in LLDP driver (the "Microsoft LLDP Protocol Driver" on each network adapter) that announces the PC, but it sends only an id (its computer name or its MAC address) and its MAC, no IP or description. A device that sends only that is listed as a **Computer**, named by the id it sent. A PC with that driver turned off, a Mac or a Linux PC without an LLDP agent, and most printers send nothing, so their ports are plain grey; the MAC addresses on them are in Port documentation. A Cisco phone or access point usually answers both CDP and LLDP; it's listed once, as "CDP + LLDP". If a switch gives nothing at all, LLDP may be off on it (`lldp run` on a Catalyst). Dell and Aruba switches only give a short LLDP table, so their devices have no IP or model.
 
 ## Names and locations filled in from the switches
 

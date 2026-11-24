@@ -88,6 +88,24 @@ def reading():
                  k({"source": "LLDP", "caps": "P", "platform": ""}, "aruba_mas")]
                 == ["network", "other", "ap", "phone", "ap", "phone"])
 
+    print("\nWindows PCs (their built-in LLDP sends an id and a MAC, nothing else)")
+    win = L.neighbors_from({"cdp": "", "lldp": LD._windows_block("Gi1/0/3", "LAB-PC-07", "9c7b.ef12.3456")
+                            + LD._windows_block("Gi1/0/4", "9c7b.ef12.9999", "9c7b.ef12.9999")}, "cisco_ios")
+    devs = [L._device({**nb, "sources": {nb["source"]}}) for nb in win]
+    ok &= check("a computer, named by the computer name it sent, or by its MAC when that's all it sent",
+                [(d["kind"], d["name"], d["mac"], d["model"], d["caps"]) for d in devs] ==
+                [("pc", "LAB-PC-07", "9c7b.ef12.3456", "", ""), ("pc", "9c7b.ef12.9999", "9c7b.ef12.9999", "", "")], devs)
+    nx_null = ("Chassis id: 9c7b.ef12.3456\nPort id: 9c7b.ef12.3456\nLocal Port id: Eth1/9\nPort Description: null\n"
+               "System Name: null\nSystem Description: null\nTime remaining: 98 seconds\nSystem Capabilities: "
+               "not advertised\nEnabled Capabilities: not advertised\nManagement Address: not advertised\n")
+    nb = L.neighbors_from({"lldp": nx_null}, "cisco_nxos")[0]
+    ok &= check("the same on a Nexus, which prints 'null' for what wasn't sent",
+                nb["kind"] == "pc" and L._device({**nb, "sources": {"LLDP"}})["name"] == "9c7b.ef12.3456", nb)
+    ok &= check("a Linux or Windows description with 'station' is a computer; a printer's is not",
+                [L.kind_of({"source": "LLDP", "caps": "S", "platform": p}) for p in
+                 ("Ubuntu 22.04.4 LTS Linux 5.15.0", "Windows Server 2022", "HP ETHERNET MULTI-ENVIRONMENT")]
+                == ["pc", "pc", "other"])
+
     print("\nThe same device said two ways")
     phone_cdp = {"local": "Gi1/0/5", "name": "SEP001122334455", "ip": "10.0.5.5", "chassis": "", "port": "Port 1",
                  "platform": "Cisco IP Phone 8845", "caps": "Host Phone", "source": "CDP", "kind": "phone", "model": ""}
@@ -102,6 +120,10 @@ def reading():
                 ("SEP001122334455", "CP-8845", "0011.2233.4455", "CDP + LLDP"), dev)
     other = {**phone_lldp, "name": "PC-42", "ip": "10.0.5.99", "chassis": "aaaa.bbbb.cccc", "kind": "other"}
     ok &= check("two different devices on a port stay two", len(L.merge([phone_cdp, phone_lldp, other])) == 2)
+    pc = {"local": "Gi1/0/5", "name": "", "ip": "", "chassis": "PC-9", "port": "aaaa.bbbb.cccc", "platform": "",
+          "caps": "", "source": "LLDP", "kind": "pc", "model": ""}
+    ok &= check("a phone (CDP only) and the Windows PC behind it stay two",
+                [m["kind"] for m in L.merge([phone_cdp, pc])] == ["phone", "pc"])
     ok &= check("MAC addresses in any of the usual forms", [L._mac(x) for x in
                 ("00:11:22:33:00:01", "0011.2233.4455", "00-11-22-33-44-55", "eth0", "Gi0")] ==
                 ["0011.2233.0001", "0011.2233.4455", "0011.2233.4455", "", ""])
@@ -113,7 +135,7 @@ def demo():
     print("\nThe made-up building")
     data = L.run_demo()
     by = {s["name"]: s for s in data["switches"]}
-    ok &= check("totals by type", data["counts"] == {"phone": 81, "ap": 7, "network": 11, "other": 2}
+    ok &= check("totals by type", data["counts"] == {"phone": 82, "ap": 7, "network": 11, "pc": 14, "other": 2}
                 and data["read"] == 5 and data["failed"] == 1, data["counts"])
     sw1 = {p["port"]: p for p in by["E3-IDF-SW1"]["ports"]}
     ok &= check("a two-member stack: 48 + 4 uplinks each", len(sw1) == 104)
@@ -135,8 +157,11 @@ def demo():
     ok &= check("location from SNMP when the list has none", by["M2-ARUBA"]["location"] == "M Building 2nd floor")
     rows = L.rows(by["E3-IDF-SW1"])
     devices = [r for r in rows if r.get("device")]
-    ok &= check("CSV rows: one per port, plus one per device", len(rows) == 104 and len(devices) == 56
-                and devices[0]["kind"] == "Phone", (len(rows), len(devices)))
+    ok &= check("a phone with a Windows PC behind it: both on the port",
+                [(d["kind"], d["name"]) for d in sw1["Gi1/0/5"]["neighbors"]] ==
+                [("phone", "SEP00BB000013F1"), ("pc", "E3-PC-105")], sw1["Gi1/0/5"]["neighbors"])
+    ok &= check("CSV rows: one per port, plus one per extra device on a port", len(rows) == 105 and len(devices) == 68
+                and devices[0]["kind"] == "Computer", (len(rows), len(devices)))
     return ok
 
 
@@ -206,13 +231,14 @@ def full_run():
     ok &= check("the switch with the wrong password is reported",
                 sum("Couldn't read" in m for m in log) == 1 and any("E4" in m or "login failed" in m for m in log), log)
     ok &= check("the log counts each switch's devices",
-                any(m.startswith("E3-IDF-SW1 (") and "56 devices (47 phones, 4 access points" in m for m in log), log)
+                any(m.startswith("E3-IDF-SW1 (") and "68 devices (48 phones, 4 access points, 3 switches or routers, "
+                    "11 computers, 2 other devices)" in m for m in log), log)
 
     runs = client.get("/api/lldp/runs", **base).json["runs"]
     run = runs[0]
     ok &= check("run listed with its totals and the switch it couldn't read",
-                run["run"] == job["report_file"] and run["switches"] == 5 and run["devices"] == 101
-                and run["counts"] == {"phone": 81, "ap": 7, "network": 11, "other": 2}
+                run["run"] == job["report_file"] and run["switches"] == 5 and run["devices"] == 116
+                and run["counts"] == {"phone": 82, "ap": 7, "network": 11, "pc": 14, "other": 2}
                 and len(run["failed"]) == 1, run)
     page = client.get(f"/lldp/view/{run['run']}", **base)
     ok &= check("its page opens, with the CSV buttons", page.status_code == 200
@@ -221,7 +247,7 @@ def full_run():
     r = client.get(f"/lldp/download/{run['run']}/devices", **base)
     rows = list(csv.DictReader(io.StringIO(r.data.decode("utf-8-sig"))))
     ok &= check("Devices CSV: a BOM for Excel, the columns, a row per device",
-                r.data.startswith(b"\xef\xbb\xbf") and list(rows[0]) == [c[0] for c in L.COLUMNS] and len(rows) == 101,
+                r.data.startswith(b"\xef\xbb\xbf") and list(rows[0]) == [c[0] for c in L.COLUMNS] and len(rows) == 116,
                 (len(rows), list(rows[0]) if rows else None))
     ap = next(row for row in rows if row["Connected device"] == "AP-E3-112")
     ok &= check("an access point row", (ap["Switch"], ap["Port"], ap["Port description"], ap["Device type"],
@@ -230,9 +256,12 @@ def full_run():
                  "CDP + LLDP"), ap)
     r = client.get(f"/lldp/download/{run['run']}/ports", **base)
     every = list(csv.DictReader(io.StringIO(r.data.decode("utf-8-sig"))))
-    ok &= check("Every port CSV: ports with nothing are there too", len(every) == 104 + 28 + 48 + 24 + 9
-                and any(row["Port"] == "Gi1/0/1" and row["Status"] == "connected" and not row["Connected device"]
-                        for row in every), len(every))
+    ok &= check("Every port CSV: ports with nothing are there too", len(every) == 105 + 28 + 48 + 24 + 9
+                and any(row["Status"] == "connected" and not row["Connected device"] for row in every)
+                and any(row["Status"] == "notconnect" and not row["Connected device"] for row in every), len(every))
+    pcs = [row for row in rows if row["Device type"] == "Computer"]
+    ok &= check("Windows PCs in the Devices CSV, as Computer, with their MAC", len(pcs) == 14
+                and pcs[0]["Device MAC"] and pcs[0]["Found by"] == "LLDP", pcs[:1])
     r = client.get(f"/lldp/download/{run['run']}/zip", **base)
     names = sorted(zipfile.ZipFile(io.BytesIO(r.data)).namelist()) if r.status_code == 200 else []
     ok &= check("one CSV per switch, named after it", names == ["CORE-1.csv", "E2-IDF.csv", "E3-IDF-SW1.csv",

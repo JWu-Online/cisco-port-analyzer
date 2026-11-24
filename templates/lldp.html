@@ -21,14 +21,15 @@
     .kinds { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 0.85rem; color: var(--ink-2); }
     .kinds span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 2px;
       margin-right: 5px; background: var(--k); vertical-align: 0; }
-    .k-phone { --k: #2a78d6; } .k-ap { --k: #eb6834; } .k-network { --k: #1baf7a; } .k-other { --k: #7b7a75; }
+    .k-phone { --k: #2a78d6; } .k-ap { --k: #eb6834; } .k-network { --k: #1baf7a; } .k-pc { --k: #B8C2CC; }
+    .k-other { --k: #7b7a75; }
   </style>
 </head>
 <body>
   <header class="topbar">
     <a class="link" href="/">&larr; Port Analyzer</a>
     <h1>LLDP neighbors</h1>
-    <p>What's plugged into each port: every phone, access point, switch and other device that tells the switch who it is (LLDP, and CDP on Cisco). See it switch by switch, and get CSVs.</p>
+    <p>What's plugged into each port: every phone, access point, switch, computer and other device that tells the switch who it is (LLDP, and CDP on Cisco). See it switch by switch, and get CSVs.</p>
   </header>
 
   <main>
@@ -38,8 +39,9 @@
         <label class="field"><span>Switches</span><select id="scope"></select></label>
         <p class="hint" id="scopeHint"></p>
         <p class="hint">Uses the switch list from the Port Analyzer page. Each switch is asked for its ports and its LLDP
-          neighbors (and CDP neighbors on Cisco). A PC usually doesn't send LLDP, so its port shows as "link up, nothing
-          said who it is"; the MAC addresses on it are in Port documentation.
+          neighbors (and CDP neighbors on Cisco). Windows 10 and 11 PCs announce themselves, but with only their computer
+          name or MAC address. A device that sends nothing shows as "link up, nothing said who it is"; the MAC addresses
+          on it are in Port documentation.
           <a class="link" href="/lldp/demo" target="_blank" rel="noopener">See a made-up building</a></p>
       </section>
 
@@ -87,7 +89,7 @@
         <dl class="cols">
           <dt>Switch, Address, Building, Location</dt><dd>The switch's name (from its prompt) and what your switch list says about it.</dd>
           <dt>Port, Port description, Status, VLAN</dt><dd>The port, its description on the switch, its status in the switch's own words (connected, notconnect, disabled, err-disabled...) and its VLAN (Cisco).</dd>
-          <dt>Connected device, Device type</dt><dd>The name the device gave (its IP or MAC address if it gave none), and Phone, Access point, Switch or router, or Other device (a printer, a camera, a server...).</dd>
+          <dt>Connected device, Device type</dt><dd>The name the device gave (its IP, the id it sent or its MAC address if it gave none), and Phone, Access point, Switch or router, Computer (Windows sends just its computer name or MAC) or Other device (a printer, a camera...).</dd>
           <dt>Device IP, Model / platform</dt><dd>Its management address and what it says it is, like CP-8845 or C9120AXI-B.</dd>
           <dt>Its port, Capabilities, Device MAC</dt><dd>Its own port that's plugged in, what it says it can do (B bridge, T telephone, W access point, R router...), and its MAC address when it sends one.</dd>
           <dt>Found by</dt><dd>LLDP, CDP, or CDP + LLDP when the device said it both ways.</dd>
@@ -152,7 +154,8 @@
 
     // ---- earlier runs ----
     var KINDS = { phone: ["phone", "phones"], ap: ["access point", "access points"],
-                  network: ["switch or router", "switches or routers"], other: ["other device", "other devices"] };
+                  network: ["switch or router", "switches or routers"], pc: ["computer", "computers"],
+                  other: ["other device", "other devices"] };
     async function loadRuns() {
       var runs = (await api("/api/lldp/runs")).data.runs || [];
       var list = $("#runs");

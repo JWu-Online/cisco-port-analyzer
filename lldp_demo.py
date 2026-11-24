@@ -3,7 +3,8 @@ A made-up building for the LLDP neighbors page and its tests: what each switch w
 
     E3-IDF-SW1  Cisco Catalyst, two-member stack: desk phones (CDP and LLDP, the same phone both ways),
                 access points, a printer and a camera that only speak LLDP, a phone from another maker,
-                PCs that say nothing, a port shut down and one err-disabled
+                Windows PCs (their built-in LLDP sends only a name or MAC), PCs that say nothing, a PC
+                behind a phone, a port shut down and one err-disabled
     E3-IDF-SW2  Cisco Catalyst, 24 ports, daisy-chained off SW1
     E2-IDF      Dell PowerConnect: phones and an access point by LLDP
     M2-ARUBA    Aruba Mobility Access Switch: its LLDP table has its own letters (A access point, P phone)
@@ -41,6 +42,15 @@ def _lldp_block(local, chassis, port, port_desc, name, sysdesc, caps, ip, model=
             f"Management Addresses:\n    IP: {ip}\n{med}")
 
 
+def _windows_block(local, chassis, mac):
+    """What a Catalyst shows for a Windows PC: its LLDP driver sends an id and its MAC, nothing else."""
+    return (f"------------------------------------------------\nLocal Intf: {local}\nChassis id: {chassis}\n"
+            f"Port id: {mac}\nPort Description - not advertised\nSystem Name - not advertised\n"
+            f"System Description - not advertised\n\nTime remaining: 101 seconds\n"
+            f"System Capabilities - not advertised\nEnabled Capabilities - not advertised\n"
+            f"Management Addresses - not advertised\n")
+
+
 def _mac(n):
     raw = f"00bb{n:08x}"
     return f"{raw[0:4]}.{raw[4:8]}.{raw[8:12]}"
@@ -60,7 +70,10 @@ def _catalyst(name, members, ports_per, plan, uplinks, building_octet):
             ip = f"10.0.{building_octet}.{(m - 1) * 50 + p}"
             mac = _mac(building_octet * 1000 + m * 100 + p)
             sep = "SEP" + mac.replace(".", "").upper()
-            if kind == "phone":
+            if kind in ("pc", "phone+pc") and p % 3:                 # Windows: its name, or just its MAC
+                pc_mac = _mac(building_octet * 1000 + m * 100 + p + 500)
+                lldp.append(_windows_block(port, f"{name[:2]}-PC-{m}{p:02d}" if p % 2 else pc_mac, pc_mac))
+            if kind in ("phone", "phone+pc"):
                 cdp.append(_cdp_block(sep, ip, "Cisco IP Phone 8845", "Host Phone Two-port Mac Relay", long, "Port 1",
                                       False))
                 lldp.append(_lldp_block(port, mac, mac, "SW PORT", sep, "Cisco IP Phone CP-8845, V3, sip88xx.14-1",
@@ -126,6 +139,8 @@ def _sw1_plan(m, p):
         return "disabled", "Spare"
     if (m, p) == (2, 30):
         return "errdisabled", "Rm E-330 desk 1"
+    if (m, p) == (1, 5):
+        return "phone+pc", "Rm E-305 desk 1"
     roll = rng.random()
     if roll < 0.55:
         return "phone", f"Rm E-3{p:02d} desk {m}"
