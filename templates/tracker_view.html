@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Device tracker {{ data.created }} - Port Analyzer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Cpath d='M8 21h8l-3-3m3 3-3 3' stroke='%23eb6834' stroke-width='2.4' fill='none'/%3E%3Crect x='19' y='11' width='6' height='5' fill='%232a78d6'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+  <style>
+    /* Change colors: three categorical slots (validated all-pairs, light and dark) for Moved, New and Back;
+       Missing is a neutral slate and VLAN changed a hollow ring (a different shape, not another color).
+       Every change also says its name in words. */
+    :root { --c-moved: #eb6834; --c-new: #2a78d6; --c-back: #1baf7a; --c-missing: #4a5662; }
+    @media (prefers-color-scheme: dark) {
+      :root { --c-moved: #d95926; --c-new: #3987e5; --c-back: #199e70; --c-missing: #97a3ae; }
+    }
+    .topbar-row .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+    .tile { text-align: left; background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--radius);
+            padding: 12px 14px; cursor: pointer; font: inherit; color: inherit; display: grid; gap: 2px; }
+    .tile:hover { border-color: var(--line); }
+    .tile[aria-pressed="true"] { border-color: var(--action); box-shadow: inset 0 0 0 1px var(--action); }
+    .tile .label { display: flex; align-items: center; gap: 7px; font-size: 0.85rem; color: var(--ink-2); }
+    .tile .value { font-size: 1.7rem; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+    .tile .note { font-size: 0.78rem; color: var(--ink-3); }
+    .dot { width: 10px; height: 10px; border-radius: 3px; flex: none; display: inline-block; }
+    .c-moved { background: var(--c-moved); } .c-new { background: var(--c-new); } .c-back { background: var(--c-back); }
+    .c-missing { background: var(--c-missing); }
+    .c-vlan { background: transparent; box-shadow: inset 0 0 0 2px var(--ink-3); border-radius: 50%; }
+    .chip { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+    .controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: flex-end; }
+    .controls .field { margin: 0; min-width: 180px; }
+    .controls .grow { flex: 1 1 280px; }
+    .shown { font-size: 0.9rem; color: var(--ink-2); margin-top: 10px; }
+    .tbl-wrap { overflow-x: auto; margin-top: 10px; }
+    table.t { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+    table.t th { text-align: left; font-weight: 600; color: var(--ink-2); padding: 6px 8px; border-bottom: 1px solid var(--line);
+                 white-space: nowrap; }
+    table.t td { padding: 5px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; white-space: nowrap; }
+    table.t td.wrap { white-space: normal; min-width: 160px; }
+    table.t tr[hidden] { display: none; }
+    .muted { color: var(--ink-3); }
+    .mono { font-family: var(--mono); font-size: 0.82rem; }
+    .arrow { color: var(--ink-3); padding: 0 2px; }
+    .empty-filter { padding: 22px; text-align: center; color: var(--ink-3); }
+    .more-rows { margin-top: 10px; }
+    .switch-notes { margin: 6px 0 0; padding-left: 18px; font-size: 0.88rem; }
+    @media print {
+      .no-print, .controls, .topbar-row .actions, .more-rows { display: none !important; }
+      body { background: #fff; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="link no-print" href="/tracker">&larr; Device tracker</a>
+    <div class="topbar-row">
+      <h1>Device tracker scan</h1>
+      <div class="actions">
+        {% if run %}
+        <a class="btn" href="/tracker/download/{{ run }}/changes">Changes CSV</a>
+        <a class="btn" href="/tracker/download/{{ run }}/devices">Devices CSV</a>
+        {% endif %}
+        <button class="btn" id="printBtn">Print / Save PDF</button>
+      </div>
+    </div>
+    <p id="subtitle"></p>
+    {% if data.demo %}<div class="notice warn" style="margin-top:8px"><p>A made-up campus after five daily scans, to show what the page looks like. No switch was asked anything.</p></div>{% endif %}
+    <div id="notes"></div>
+  </header>
+
+  <main>
+    <section class="panel" aria-labelledby="changesTitle">
+      <div class="panel-head">
+        <h2 id="changesTitle">What changed since the last scans</h2>
+        <p id="changesIntro"></p>
+      </div>
+      <div class="tiles" id="tiles" aria-label="Changes, by kind. Click one to show only that kind."></div>
+      <div class="controls" style="margin-top:14px">
+        <label class="field grow"><span>Find</span>
+          <input id="cq" type="search" placeholder="Name, MAC, IP, switch, port or VLAN" autocomplete="off"></label>
+      </div>
+      <p class="shown" id="cShown"></p>
+      <div class="tbl-wrap">
+        <table class="t" id="changes">
+          <thead><tr><th scope="col">Change</th><th scope="col">Device</th><th scope="col">Type</th><th scope="col">MAC</th>
+            <th scope="col">IP</th><th scope="col">Was on</th><th scope="col"></th><th scope="col">Now on</th><th scope="col">Note</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="empty-filter" id="cEmpty" hidden></p>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="devicesTitle">
+      <div class="panel-head">
+        <h2 id="devicesTitle">Every device this scan found</h2>
+        <p>Where each device is plugged in. <strong>Found by</strong> says how: LLDP or CDP (it said who it is), the MAC
+          table (only its MAC address was seen), or both.</p>
+      </div>
+      <div class="controls">
+        <label class="field"><span>Building</span><select id="building"></select></label>
+        <label class="field"><span>Type</span><select id="kind"></select></label>
+        <label class="field grow"><span>Find</span>
+          <input id="q" type="search" placeholder="Name, MAC, IP, switch, port, description or VLAN" autocomplete="off"></label>
+      </div>
+      <p class="shown" id="dShown"></p>
+      <div class="tbl-wrap">
+        <table class="t" id="devices">
+          <thead><tr><th scope="col">Device</th><th scope="col">Type</th><th scope="col">MAC</th><th scope="col">IP</th>
+            <th scope="col">Switch</th><th scope="col">Port</th><th scope="col">Port description</th><th scope="col">VLAN</th>
+            <th scope="col">Found by</th><th scope="col">First seen</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="empty-filter" id="dEmpty" hidden>Nothing matches.</p>
+      </div>
+      <button class="btn more-rows" id="moreRows" type="button" hidden></button>
+    </section>
+  </main>
+
+  <script>
+  (function () {
+    "use strict";
+    var D = {{ data|tojson }};
+    var ORDER = ["moved", "new", "missing", "back", "vlan"];      // tojson sorts keys, so the order lives here
+    var NOTES = { moved: "on a different switch or port", new: "never seen before",
+                  missing: "not seen for a few scans in a row", back: "seen again after it went missing",
+                  vlan: "same port, a different VLAN" };
+    var KIND_ORDER = ["phone", "ap", "network", "pc", "other", "unknown"];
+    var $ = function (s) { return document.querySelector(s); };
+    var state = { change: "", limit: 300 };
+    function el(tag, props, text) {
+      var e = document.createElement(tag);
+      Object.keys(props || {}).forEach(function (k) { e.setAttribute(k, props[k]); });
+      if (text !== undefined) e.textContent = text;
+      return e;
+    }
+    function plural(n, one, many) { return n.toLocaleString() + " " + (n === 1 ? one : many); }
+    function hex(text) { return String(text || "").toLowerCase().replace(/[^0-9a-f]/g, ""); }
+    function matches(q, fields, mac) {
+      if (!q) return true;
+      var words = q.toLowerCase().split(/\s+/).filter(Boolean);
+      var text = fields.join(" ").toLowerCase(), digits = hex(mac);
+      return words.every(function (w) {
+        var h = hex(w);
+        return text.indexOf(w) !== -1 || (h.length >= 4 && h.length === w.replace(/[.:\-]/g, "").length && digits.indexOf(h) !== -1);
+      });
+    }
+    function placeText(sw, port, vlan) {
+      if (!sw) return "";
+      return sw + " " + port + (vlan !== "" && vlan !== null && vlan !== undefined ? " · VLAN " + vlan : "");
+    }
+
+    // ---- heading ----
+    var how = D.source === "scheduled" ? "the daily scan" : "scanned by hand";
+    $("#subtitle").textContent = D.created + " (" + how + ") · " + D.read + " of " + plural(D.switches, "switch", "switches") +
+      " read · " + plural(D.devices, "device", "devices");
+    var notes = $("#notes");
+    function notice(kind, lines) {
+      var box = el("div", { "class": "notice " + kind, style: "margin-top:8px" });
+      lines.forEach(function (l) { box.appendChild(typeof l === "string" ? el("p", {}, l) : l); });
+      notes.appendChild(box);
+    }
+    if (D.baseline) notice("", ["First scan: this is the starting point. From the next scan on, this page shows what moved, what's new and what went missing."]);
+    if (D.failed && D.failed.length) {
+      var ul = el("ul", { "class": "switch-notes" });
+      D.failed.forEach(function (f) { ul.appendChild(el("li", {}, (f.name !== f.address ? f.name + " (" + f.address + ")" : f.address) + ": " + f.problem)); });
+      notice("error", [plural(D.failed.length, "switch wasn't", "switches weren't") + " read, so the devices on them weren't counted as missing:", ul]);
+    }
+    if (D.partial && D.partial.length) {
+      var ul2 = el("ul", { "class": "switch-notes" });
+      D.partial.forEach(function (f) { ul2.appendChild(el("li", {}, (f.name !== f.address ? f.name + " (" + f.address + ")" : f.address) + ": " + f.problem)); });
+      notice("warn", ["Read, but not their MAC tables (only devices that said who they are were seen there):", ul2]);
+    }
+
+    // ---- changes ----
+    var total = ORDER.reduce(function (n, k) { return n + (D.counts[k] || 0); }, 0);
+    $("#changesIntro").textContent = D.baseline ? "Nothing to compare with yet." :
+      (total ? plural(total, "change", "changes") + ". Click a box to show only that kind." : "Nothing moved, nothing new, nothing went missing.");
+    var tiles = $("#tiles");
+    ORDER.forEach(function (k) {
+      var b = el("button", { "class": "tile", type: "button", "aria-pressed": "false", "data-k": k });
+      var label = el("span", { "class": "label" });
+      label.appendChild(el("i", { "class": "dot c-" + k, "aria-hidden": "true" }));
+      label.appendChild(document.createTextNode(D.change_names[k]));
+      b.appendChild(label);
+      b.appendChild(el("span", { "class": "value" }, String(D.counts[k] || 0)));
+      b.appendChild(el("span", { "class": "note" }, NOTES[k]));
+      b.addEventListener("click", function () {
+        state.change = state.change === k ? "" : k;
+        tiles.querySelectorAll(".tile").forEach(function (t) { t.setAttribute("aria-pressed", String(t.dataset.k === state.change)); });
+        filterChanges();
+      });
+      tiles.appendChild(b);
+    });
+    var cBody = $("#changes tbody");
+    var cRows = D.changes.map(function (c) {
+      var tr = el("tr");
+      var chip = el("span", { "class": "chip" });
+      chip.appendChild(el("i", { "class": "dot c-" + c.change, "aria-hidden": "true" }));
+      chip.appendChild(document.createTextNode(c.change_name));
+      var td = el("td"); td.appendChild(chip); tr.appendChild(td);
+      tr.appendChild(c.name ? el("td", { "class": "wrap" }, c.name) : el("td", { "class": "wrap muted" }, c.model || "no name"));
+      tr.appendChild(el("td", {}, c.kind_name));
+      tr.appendChild(el("td", { "class": "mono" }, c.mac));
+      tr.appendChild(el("td", { "class": "mono" }, c.ip));
+      tr.appendChild(el("td", {}, placeText(c.from_switch, c.from_port, c.from_vlan) || "—"));
+      tr.appendChild(el("td", { "class": "arrow", "aria-hidden": "true" }, "→"));
+      tr.appendChild(el("td", {}, placeText(c.to_switch, c.to_port, c.to_vlan) || (c.change === "missing" ? "not seen" : "—")));
+      tr.appendChild(el("td", { "class": "wrap muted" }, c.note));
+      cBody.appendChild(tr);
+      return { tr: tr, c: c, text: [c.change_name, c.name, c.mac, c.ip, c.kind_name, c.from_switch, c.from_port, "vlan " + c.from_vlan,
+                                    c.to_switch, c.to_port, "vlan " + c.to_vlan, c.building, c.note] };
+    });
+    function filterChanges() {
+      var q = $("#cq").value.trim(), shown = 0;
+      cRows.forEach(function (r) {
+        var ok = (!state.change || r.c.change === state.change) && matches(q, r.text, r.c.mac);
+        r.tr.hidden = !ok;
+        if (ok) shown++;
+      });
+      $("#cShown").textContent = D.changes.length ? "Showing " + shown.toLocaleString() + " of " + plural(D.changes.length, "change", "changes") + "." : "";
+      $("#cEmpty").hidden = shown > 0;
+      $("#cEmpty").textContent = D.changes.length ? "Nothing matches." : (D.baseline ? "The next scan will be compared with this one." : "No changes.");
+    }
+    $("#cq").addEventListener("input", filterChanges);
+    filterChanges();
+
+    // ---- every device ----
+    var buildings = {}, kinds = {};
+    D.devices_list.forEach(function (d) { buildings[d.building || ""] = true; kinds[d.kind] = (kinds[d.kind] || 0) + 1; });
+    var bSel = $("#building");
+    bSel.appendChild(el("option", { value: "*" }, "All buildings"));
+    Object.keys(buildings).sort().forEach(function (b) { bSel.appendChild(el("option", { value: b }, b || "(no building)")); });
+    var kSel = $("#kind");
+    kSel.appendChild(el("option", { value: "" }, "All types"));
+    KIND_ORDER.forEach(function (k) {
+      if (kinds[k]) kSel.appendChild(el("option", { value: k }, D.kind_names[k] + " (" + kinds[k].toLocaleString() + ")"));
+    });
+    var dBody = $("#devices tbody");
+    function deviceRow(d) {
+      var tr = el("tr");
+      tr.appendChild(d.name ? el("td", { "class": "wrap" }, d.name) : el("td", { "class": "wrap muted" }, d.model || "no name"));
+      tr.appendChild(el("td", {}, d.kind_name));
+      tr.appendChild(el("td", { "class": "mono" }, d.mac));
+      tr.appendChild(el("td", { "class": "mono" }, d.ip));
+      tr.appendChild(el("td", {}, d.switch_name));
+      tr.appendChild(el("td", {}, d.port));
+      tr.appendChild(el("td", { "class": "wrap muted" }, d.port_description));
+      tr.appendChild(el("td", {}, d.vlan === "" ? "" : String(d.vlan)));
+      tr.appendChild(el("td", {}, d.found_by));
+      tr.appendChild(el("td", { "class": "muted" }, d.first_seen));
+      if (d.also) tr.title = "Also seen on " + d.also;
+      return tr;
+    }
+    function filterDevices() {
+      var q = $("#q").value.trim(), b = bSel.value, k = kSel.value;
+      var hits = D.devices_list.filter(function (d) {
+        return (b === "*" || (d.building || "") === b) && (!k || d.kind === k) &&
+          matches(q, [d.name, d.mac, d.ip, d.switch_name, d.switch, d.port, d.port_description, "vlan " + d.vlan, d.model,
+                      d.kind_name, d.found_by, d.building, d.also], d.mac);
+      });
+      dBody.textContent = "";
+      var frag = document.createDocumentFragment();
+      hits.slice(0, state.limit).forEach(function (d) { frag.appendChild(deviceRow(d)); });
+      dBody.appendChild(frag);
+      $("#dShown").textContent = "Showing " + Math.min(hits.length, state.limit).toLocaleString() + " of " +
+        plural(hits.length, "matching device", "matching devices") + (hits.length !== D.devices_list.length ? " (" + D.devices_list.length.toLocaleString() + " in all)" : "") + ".";
+      $("#dEmpty").hidden = hits.length > 0;
+      var more = $("#moreRows");
+      more.hidden = hits.length <= state.limit;
+      more.textContent = "Show all " + hits.length.toLocaleString();
+    }
+    $("#moreRows").addEventListener("click", function () { state.limit = Infinity; filterDevices(); });
+    [bSel, kSel].forEach(function (s) { s.addEventListener("change", function () { state.limit = 300; filterDevices(); }); });
+    $("#q").addEventListener("input", function () { state.limit = 300; filterDevices(); });
+    filterDevices();
+
+    $("#printBtn").addEventListener("click", function () {
+      state.limit = Infinity; filterDevices();
+      window.print();
+    });
+  })();
+  </script>
+</body>
+</html>

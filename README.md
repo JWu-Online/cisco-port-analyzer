@@ -166,6 +166,38 @@ Columns: Switch, Address, Building, Location, Port, Port description, Status (th
 
 Good to know: Windows 10 and 11 have a built-in LLDP driver (the "Microsoft LLDP Protocol Driver" on each network adapter) that announces the PC, but it sends only an id (its computer name or its MAC address) and its MAC, no IP or description. A device that sends only that is listed as a **Computer**, named by the id it sent. A PC with that driver turned off, a Mac or a Linux PC without an LLDP agent, and most printers send nothing, so their ports are plain grey; the MAC addresses on them are in Port documentation. A Cisco phone or access point usually answers both CDP and LLDP; it's listed once, as "CDP + LLDP". If a switch gives nothing at all, LLDP may be off on it (`lldp run` on a Catalyst). Dell and Aruba switches only give a short LLDP table, so their devices have no IP or model.
 
+## Device tracker
+
+Click **Device tracker** at the top of the page to keep track of **where every device is plugged in, day by day**. It reads every switch on your list over **SNMP** (read-only: it can't change anything) and writes down two things:
+- **LLDP/CDP neighbors**: phones, access points, switches and PCs that say who they are.
+- **The MAC tables**: every MAC address each switch has learned on each port, so the quiet devices (printers, cameras, most PCs) are counted too.
+
+Each scan is compared with what it knew before and saved as a page and two CSVs. **See a made-up campus** shows the page without asking any switch anything.
+
+**Set it up once:**
+1. Get a **read-only SNMP login** for the switches that lets your PC's address in. Ask whoever manages them. SNMPv3 is better because it's encrypted (a username, an authentication password and a privacy password). v2c is a community string. LibreNMS and Observium already use one, but the switches' SNMP access list probably only lets their servers in.
+2. Enter it under **SNMP login** and click **Test** on one switch. It says what came back: how many ports, LLDP and CDP neighbors and MAC addresses.
+3. Click **Save login**. It goes in **Windows Credential Manager**, under your Windows account. It's encrypted by Windows and is never saved in the data folder or on GitHub. The daily scan needs it saved because nobody is there to type it. **Forget saved login** removes it.
+4. Under **Daily scan**, pick a time and **Every day** or **Monday to Friday**, then click **Turn on**. That makes a Windows Task Scheduler task called "Port Analyzer device tracker". It runs `TrackDevices.bat` as you, in a minimized window, while you're logged on. The PC can be locked. If the PC is off or you're logged out at that time, that day is skipped. Pick a time when people are in, so their PCs are on.
+
+**Scan now** runs the same scan right away. You can also double-click `TrackDevices.bat`. The app doesn't have to be open for the daily scan.
+
+**Reading a scan** (**Open** in the list):
+- **What changed**: Moved, New, Missing, Back and VLAN changed, with where each device was and where it is now. Click a box to show only that kind.
+- **Every device this scan found**: device, type, MAC, IP, switch, port, port description, VLAN, how it was found (LLDP, CDP, MAC table) and when it was first seen. Filter by building and type, or find by name, MAC (any format), IP, switch, port or VLAN.
+- **Changes CSV**: Change, MAC, IP, Name, Type, From switch / port / VLAN, To switch / port / VLAN, Note.
+- **Devices CSV**: MAC, IP, Name, Type, Model, Switch, Switch address, Building, Port, Port description, VLAN, Found by, Also seen on, First seen.
+
+**How it decides:**
+- **Where a device is**: the port where it said who it is, otherwise the port where its MAC was learned. MACs on a port that leads to another switch or an access point are only passing through, so they're skipped. So is a port with more MACs than the busy port limit (40), which is most likely an uplink that didn't say so. A device is known by its MAC address, or by its name when it only sent a name (a Cisco access point over CDP).
+- **Moved**: on a different switch or port than the last place it was seen. **New**: never seen before. **VLAN changed**: same port, different VLAN.
+- **Missing**: not seen for 3 scans in a row. A device only counts as not seen when its switch was read fine, so a switch that didn't answer doesn't make its devices look missing. **Back**: seen again after it went missing. A phone unplugged for a day and plugged back into the same port is neither.
+- **The first scan** is the starting point, so it shows no changes.
+
+What it remembers is kept in `data\tracker\history.json`. Scans are in `data\tracker\scans\` and are deleted after 90 days. Deleting a scan doesn't change what it remembers. **Options** changes the numbers above. **Start over** forgets everything it remembers, so the next scan becomes the new starting point.
+
+How each switch is read: LLDP-MIB for LLDP, CISCO-CDP-MIB for CDP, Q-BRIDGE-MIB for the MAC table (Dell, Aruba, Nexus), or on a Cisco Catalyst, one MAC table per VLAN. With v2c that's `community@vlan`. With SNMPv3, the switch's SNMP group needs `context vlan- match prefix` (for example `snmp-server group TRACKER v3 priv context vlan- match prefix`). Without it, the scan says the MAC table couldn't be read for that switch, and only LLDP/CDP devices are counted there. IP addresses come from LLDP/CDP and the switches' ARP tables.
+
 ## Names and locations filled in from the switches
 
 The first time a switch is logged into (Check ports, Port documentation, LLDP neighbors, Network map, or **Test login** in the switch list), its **Name** and **Location** on your switch list are filled in from the switch itself, **if they're empty**:
@@ -218,7 +250,7 @@ Each type of switch keeps track differently:
 
 ## Your data
 
-Your switch list, settings, saved reports, Stack topology drawings, Port documentation CSVs, LLDP neighbor runs, Network maps and any debug output live in the `data` folder next to the app. Git ignores that folder, so none of it ends up on GitHub, and updating the app never touches it.
+Your switch list, settings, saved reports, Stack topology drawings, Port documentation CSVs, LLDP neighbor runs, Network maps, Device tracker scans and any debug output live in the `data` folder next to the app. Git ignores that folder, so none of it ends up on GitHub, and updating the app never touches it.
 
 ### Deleting saved runs
 
@@ -228,6 +260,7 @@ Every list of saved runs has a **Delete** button on each one, and **Delete all**
 - **CSVs** on Port documentation
 - **Runs** on LLDP neighbors
 - **Maps** on Network map
+- **Scans** on Device tracker
 
 **Delete** removes that one right away. **Delete all** asks first ("Are you sure?"), and it deletes every saved run of that kind, including older ones the list doesn't show. Only what that tool saved is deleted: your switch list, settings, Network map layer choices and what Stack topology remembers about each switch stay. If a file can't be deleted because it's open (a CSV in Excel, say), it says so; close it and try again.
 
@@ -249,6 +282,12 @@ The app logged in but didn't recognise what the switch printed. (The Stack topol
 
 **A full run is slow**
 Each switch takes a few seconds, and one that doesn't answer waits for the login timeout. Raise **Switches at once** under **More settings** (for example to 20), or check one building.
+
+**Device tracker: "No answer"**
+SNMP is off on that switch, the community string or SNMPv3 login is wrong, or the switch's SNMP access list doesn't let your PC in. Try **Test** on that switch. A wrong SNMPv3 privacy password often looks like "No answer" too, because the switch just ignores what it can't decrypt.
+
+**Device tracker: the daily scan didn't run**
+The Device tracker page shows the last scan's messages. The task only runs while you're logged on to Windows. In Task Scheduler (Start menu, "Task Scheduler") the task "Port Analyzer device tracker" shows its last run and result. Turn it off and on again on the page after moving the app folder.
 
 **RunAnalyzer.bat fails while installing libraries**
 It needs to reach pypi.org. If your network uses a proxy, open a Command Prompt in the app folder and run `set HTTPS_PROXY=http://your-proxy:port`, then `RunAnalyzer.bat`.
@@ -274,6 +313,9 @@ report.py           the Excel report
 portdocs.py         Port documentation: every port of every switch, with MAC addresses, as CSVs
 lldp.py             LLDP neighbors: what's plugged into each port (LLDP + CDP), the page data and the CSVs
 lldp_demo.py        the made-up building (switch outputs) for the sample page and the tests
+tracker.py          Device tracker: reading switches over SNMP (LLDP, CDP, MAC tables, ARP), where each device is, comparing scans, the CSVs, the daily task; run by TrackDevices.bat
+snmpwalk.py         SNMP v2c/v3 table reads (GETBULK) with pysnmp
+tracker_demo.py     the made-up campus (five daily scans) for the sample page
 network.py          Network map: CDP/LLDP from the switches on the list, plus unlisted switches in an address range, Nexus = core
 network_demo.py     the made-up campus (switch outputs) for the sample map and the tests
 topology.py         Stack topology: reading a Cisco or Dell stack, deciding each port, PoE and error checks, the cable test, Cisco/Dell config translation, the saved page
@@ -291,6 +333,7 @@ tests/              pretend switches, sample output for each type, end-to-end te
 .venv\Scripts\python tests\test_network.py
 .venv\Scripts\python tests\test_lldp.py
 .venv\Scripts\python tests\test_saved.py
+.venv\Scripts\python tests\test_tracker.py
 ```
 
 **Add a switch type:** in `switches.py`, add it to `TYPES`, `MODELS` and `DRIVERS`. In `analyzer.py`, write a reader that returns each port's status, VLAN, description and when it was last used (or that it was never used, and how far back the switch can see), and add it to `READERS`. Put sample output in `tests/samples.py` and the expected answers next to it.

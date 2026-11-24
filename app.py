@@ -14,6 +14,7 @@ import shutil
 import socket
 import sys
 import threading
+import time
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -26,7 +27,10 @@ import network
 import portdocs
 import report
 import switches as sw
+import snmpwalk
 import topology
+import tracker
+import tracker_demo
 
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("PA_DATA_DIR", APP_DIR / "data"))
@@ -38,6 +42,7 @@ TOPOLOGY_DIR = DATA_DIR / "topology"
 DOCS_DIR = DATA_DIR / "docs"
 NETWORK_DIR = DATA_DIR / "network"
 LLDP_DIR = DATA_DIR / "lldp"
+TRACKER = tracker.Store(DATA_DIR)
 
 DEFAULT_SETTINGS = {"months": 6, "default_protocol": "telnet", "parallel": 10, "timeout": 20}
 SWITCH_FIELDS = ["address", "type", "protocol", "building", "location", "name"]
@@ -53,6 +58,8 @@ net_job = analyzer.Job()           # and so does the Network map
 net_lock = threading.Lock()
 lldp_job = analyzer.Job()          # and LLDP neighbors
 lldp_lock = threading.Lock()
+tracker_job = analyzer.Job()       # and the Device tracker's scan started from the page
+tracker_lock = threading.Lock()
 
 
 @app.before_request
@@ -189,6 +196,7 @@ SAVED = {   # kind: where it's saved and what its names look like. Nothing else 
     "docs": {"dir": DOCS_DIR, "name": r"\d{8}-\d{6}", "folder": True},
     "lldp": {"dir": LLDP_DIR, "name": r"\d{8}-\d{6}", "folder": True},
     "network": {"dir": NETWORK_DIR / "pages", "name": r"network-\d{8}-\d{6}\.html"},
+    "tracker": {"dir": TRACKER.scans, "name": r"\d{8}-\d{6}", "folder": True},
 }
 
 
@@ -698,6 +706,248 @@ def lldp_download(run, kind):
 # ---------------------------------------------------------------------------
 # Network map: every switch in the three-layer model, joined by CDP/LLDP links
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Device tracker: SNMP scans of every switch, compared with the last ones
+# ---------------------------------------------------------------------------
+def _typed_login(payload):
+    """The SNMP login typed in the page. Only known values; empty secrets mean 'use the saved one'."""
+    out = {}
+    if payload.get("version") in (snmpwalk.V2C, snmpwalk.V3):
+        out["version"] = payload["version"]
+    if payload.get("auth_protocol") in snmpwalk.AUTH:
+        out["auth_protocol"] = payload["auth_protocol"]
+    if payload.get("priv_protocol") in snmpwalk.PRIV:
+        out["priv_protocol"] = payload["priv_protocol"]
+    for key in ("username", *tracker.SECRETS):
+        value = payload.get(key)
+        if isinstance(value, str) and value and len(value) <= 128:
+            out[key] = value if key != "username" else value.strip()
+    return out
+
+
+def _tracker_login(payload, settings):
+    """(creds, problems)"""
+    try:
+        creds = tracker.credentials(settings, _typed_login(payload))
+    except Exception as exc:                                    # noqa: BLE001 - Credential Manager trouble
+        return None, [f"Couldn't read the saved SNMP login: {exc}"]
+    return creds, tracker.missing_login(creds)
+
+
+def _saved_secrets():
+    try:
+        return tracker.saved_secrets(), ""
+    except Exception as exc:                                    # noqa: BLE001
+        return {name: False for name in tracker.SECRETS}, str(exc)
+
+
+@app.get("/tracker")
+def tracker_page():
+    return render_template("tracker.html")
+
+
+@app.get("/api/tracker/setup")
+def tracker_setup():
+    saved, problem = _saved_secrets()
+    log = ""
+    if TRACKER.last_log.exists():
+        lines = TRACKER.last_log.read_text(encoding="utf-8", errors="replace").splitlines()
+        log = {"when": datetime.fromtimestamp(TRACKER.last_log.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+               "lines": lines[-12:]}
+    return jsonify({"settings": TRACKER.settings(), "saved": saved, "store_problem": problem,
+                    "schedule": tracker.schedule_status(), "auth": list(snmpwalk.AUTH), "priv": list(snmpwalk.PRIV),
+                    "switches": len(load_switches()), "last_log": log,
+                    "history": len(TRACKER.history().get("devices", {}))})
+
+
+def _int_setting(payload, key, low, high, problems, label):
+    if key not in payload:
+        return None
+    try:
+        value = int(payload[key])
+        if not low <= value <= high:
+            raise ValueError
+        return value
+    except (TypeError, ValueError):
+        problems.append(f"{label} must be a whole number from {low} to {high}.")
+        return None
+
+
+@app.post("/api/tracker/setup")
+def tracker_setup_save():
+    """Save the SNMP settings; passwords and the community string go to Windows Credential Manager."""
+    payload = request.json or {}
+    settings, problems = TRACKER.settings(), []
+    typed = _typed_login(payload)
+    for key in ("version", "auth_protocol", "priv_protocol"):
+        if key in typed:
+            settings[key] = typed[key]
+    if "username" in payload:
+        settings["username"] = str(payload.get("username") or "").strip()[:64]
+    for key, low, high, label in (("missing_after", 1, 30, "Missing after"), ("busy_limit", 2, 1000, "Busy port limit"),
+                                  ("keep_days", 7, 3650, "Keep scans for"), ("forget_days", 30, 3650, "Forget after"),
+                                  ("parallel", 1, 50, "Switches at once"), ("timeout", 1, 30, "Timeout")):
+        value = _int_setting(payload, key, low, high, problems, label)
+        if value is not None:
+            settings[key] = value
+    if problems:
+        return jsonify({"ok": False, "problems": problems}), 400
+    TRACKER.save_settings(settings)
+    try:
+        for name in tracker.SECRETS:
+            if typed.get(name):
+                tracker.save_secret(name, typed[name])
+    except Exception as exc:                                    # noqa: BLE001
+        return jsonify({"ok": False, "problems": [f"Settings saved, but the login couldn't be saved in Windows "
+                                                  f"Credential Manager: {exc}"]}), 500
+    saved, _ = _saved_secrets()
+    return jsonify({"ok": True, "settings": settings, "saved": saved})
+
+
+@app.post("/api/tracker/forget")
+def tracker_forget():
+    try:
+        tracker.forget_secrets()
+    except Exception as exc:                                    # noqa: BLE001
+        return jsonify({"ok": False, "problems": [str(exc)]}), 500
+    saved, _ = _saved_secrets()
+    return jsonify({"ok": True, "saved": saved})
+
+
+@app.post("/api/tracker/test")
+def tracker_test():
+    payload = request.json or {}
+    chosen = [s for s in load_switches() if s["address"] == payload.get("address")]
+    if not chosen:
+        return jsonify({"ok": False, "problems": ["Pick a switch from your list."]}), 400
+    settings = TRACKER.settings()
+    creds, problems = _tracker_login(payload, settings)
+    if problems:
+        return jsonify({"ok": False, "problems": problems}), 400
+    return jsonify(tracker.test_switch(chosen[0], creds, settings))
+
+
+@app.post("/api/tracker/run")
+def tracker_run():
+    global tracker_job
+    payload = request.json or {}
+    with tracker_lock:
+        if tracker_job.state == "running":
+            return jsonify({"ok": False, "problems": ["A scan is already running."]}), 409
+        switches = load_switches()
+        if not switches:
+            return jsonify({"ok": False, "problems": ["The switch list is empty. Add switches on the Port Analyzer "
+                                                      "page first."]}), 400
+        settings = TRACKER.settings()
+        creds, problems = _tracker_login(payload, settings)
+        if problems:
+            return jsonify({"ok": False, "problems": problems}), 400
+        if not TRACKER.lock():
+            return jsonify({"ok": False, "problems": ["A scan is already running (the daily one, probably). "
+                                                      "Wait for it to finish."]}), 409
+        tracker_job = analyzer.Job()
+        threading.Thread(target=_tracker_scan, args=(tracker_job, switches, creds, settings), daemon=True).start()
+    return jsonify({"ok": True})
+
+
+def _tracker_scan(job, switches, creds, settings):
+    try:
+        tracker.run_scan(job, TRACKER, switches, creds, settings, source="manual")
+    finally:
+        TRACKER.unlock()
+
+
+@app.post("/api/tracker/stop")
+def tracker_stop():
+    tracker_job.stop_requested.set()
+    tracker_job.log("Stopping after the switches already in progress finish...", "warn")
+    return jsonify({"ok": True})
+
+
+@app.get("/api/tracker/job")
+def tracker_job_status():
+    snap = tracker_job.snapshot(int(request.args.get("since", 0)))
+    if snap["state"] != "running":
+        other = TRACKER.progress()               # the daily scan runs in its own window: what it last wrote
+        if other and other.get("state") == "running" and other.get("source") == "scheduled" \
+                and time.time() - float(other.get("updated", 0)) < 30:
+            snap["scheduled"] = {"progress": other.get("progress", {}), "started": other.get("started")}
+    return jsonify(snap)
+
+
+@app.get("/api/tracker/runs")
+def tracker_runs():
+    return jsonify({"runs": portdocs.list_runs(TRACKER.scans, 40), "total": len(saved_items("tracker"))})
+
+
+@app.get("/tracker/view/<run>")
+def tracker_view(run):
+    folder = portdocs.run_folder(TRACKER.scans, run)
+    if folder is None or not (folder / "scan.json").exists():
+        abort(404)
+    data = json.loads((folder / "scan.json").read_text(encoding="utf-8"))
+    return render_template("tracker_view.html", data=data, run=run)
+
+
+@app.get("/tracker/demo")
+def tracker_demo_page():
+    return render_template("tracker_view.html", data=tracker_demo.run_demo(), run="")
+
+
+@app.get("/tracker/download/<run>/<kind>")
+def tracker_download(run, kind):
+    folder = portdocs.run_folder(TRACKER.scans, run)
+    if folder is None or kind not in ("devices", "changes"):
+        abort(404)
+    path = folder / f"{kind}.csv"
+    if not path.exists():
+        abort(404)
+    return Response(path.read_bytes(), mimetype="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="tracker-{kind}-{run}.csv"'})
+
+
+@app.get("/api/tracker/schedule")
+def tracker_schedule():
+    return jsonify(tracker.schedule_status())
+
+
+@app.post("/api/tracker/schedule")
+def tracker_schedule_set():
+    """{"on": true, "time": "10:00", "days": "daily"|"weekdays"} or {"on": false}."""
+    payload = request.json or {}
+    settings = TRACKER.settings()
+    if payload.get("on"):
+        when, days = str(payload.get("time", "")), payload.get("days")
+        if not tracker._TIME.match(when) or days not in ("daily", "weekdays"):
+            return jsonify({"ok": False, "problems": ["Pick a time like 10:00, and every day or weekdays."]}), 400
+        _creds, missing = _tracker_login({}, settings)
+        if missing:
+            return jsonify({"ok": False, "problems": ["Save the SNMP login first: the daily scan uses the saved one."]
+                            + missing}), 400
+        settings.update({"time": when, "days": days})
+        TRACKER.save_settings(settings)
+        problem = tracker.schedule_on(when, days, APP_DIR)
+    else:
+        problem = tracker.schedule_off()
+    if problem:
+        return jsonify({"ok": False, "problems": [problem]}), 500
+    return jsonify({"ok": True, "schedule": tracker.schedule_status()})
+
+
+@app.post("/api/tracker/reset")
+def tracker_reset():
+    """Forget where every device was (the next scan starts over). Saved scans and CSVs stay."""
+    if (request.json or {}).get("confirm") is not True:
+        return jsonify({"ok": False, "problems": ["Say you're sure (confirm: true)."]}), 400
+    if TRACKER.lock():
+        try:
+            TRACKER.history_file.unlink(missing_ok=True)
+        finally:
+            TRACKER.unlock()
+        return jsonify({"ok": True})
+    return jsonify({"ok": False, "problems": ["A scan is running. Try again when it's done."]}), 409
+
+
 @app.get("/network")
 def network_form():
     return render_template("network_form.html")

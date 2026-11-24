@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Device tracker - Port Analyzer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Cpath d='M8 21h8l-3-3m3 3-3 3' stroke='%23eb6834' stroke-width='2.4' fill='none'/%3E%3Crect x='19' y='11' width='6' height='5' fill='%232a78d6'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/picker.js"></script>
+  <script src="/static/saved.js"></script>
+  <style>
+    :root { --c-moved: #eb6834; --c-new: #2a78d6; --c-back: #1baf7a; --c-missing: #4a5662; }
+    @media (prefers-color-scheme: dark) {
+      :root { --c-moved: #d95926; --c-new: #3987e5; --c-back: #199e70; --c-missing: #97a3ae; }
+    }
+    .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    @media (max-width: 720px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+    .stack { display: grid; gap: 14px; }
+    .status { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+    .status .led { width: 10px; height: 10px; border-radius: 50%; background: var(--ink-3); flex: none; }
+    .status.on .led { background: var(--found); }
+    .test-result { font-size: 0.9rem; margin: 0; }
+    .test-result.ok { color: var(--ink); }
+    .test-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+    .test-row .field { flex: 1 1 240px; }
+    .runs { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+    .runs > li { border: 1px solid var(--line-soft); border-radius: 6px; padding: 10px 14px; display: grid; gap: 6px; }
+    .runs > li.fresh { border-color: var(--found); box-shadow: inset 3px 0 0 var(--found); }
+    .run-head { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+    .run-head strong { font-size: 1rem; }
+    .tag { font-size: 0.75rem; font-weight: 600; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--line); color: var(--ink-2); }
+    .run-links { display: flex; flex-wrap: wrap; gap: 8px; }
+    .run-failed { font-size: 0.85rem; color: var(--danger); margin: 0; padding-left: 18px; }
+    .counts { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.88rem; color: var(--ink-2); }
+    .counts span { display: inline-flex; align-items: center; gap: 6px; }
+    .dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+    .c-moved { background: var(--c-moved); } .c-new { background: var(--c-new); } .c-back { background: var(--c-back); }
+    .c-missing { background: var(--c-missing); }
+    .c-vlan { background: transparent; box-shadow: inset 0 0 0 2px var(--ink-3); border-radius: 50%; }
+    .last-log { font-size: 0.8rem; max-height: 180px; overflow: auto; background: var(--bg); padding: 8px 10px;
+                border-radius: 6px; margin: 8px 0 0; white-space: pre-wrap; }
+    .rules { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 6px; font-size: 0.92rem; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="link" href="/">&larr; Port Analyzer</a>
+    <h1>Device tracker</h1>
+    <p>Reads every switch on your list over SNMP (read-only) and writes down where each device is plugged in. Each scan
+      is compared with the ones before, so you can see what moved, what's new and what went missing.
+      <a class="link" href="/tracker/demo" target="_blank" rel="noopener">See a made-up campus</a></p>
+  </header>
+
+  <main>
+    <div class="setup">
+      <section class="panel stack" aria-labelledby="loginTitle">
+        <div class="panel-head">
+          <h2 id="loginTitle">SNMP login</h2>
+          <p>A read-only SNMP login on the switches. Ask whoever manages them for one that lets this PC's address in
+            (SNMPv3 if you can: it's encrypted).</p>
+        </div>
+        <div class="grid2">
+          <label class="field"><span>SNMP version</span>
+            <select id="version"><option value="3">v3 (username and passwords)</option><option value="2c">v2c (community string)</option></select></label>
+          <label class="field" data-v="2c"><span>Community string</span>
+            <input id="community" type="password" autocomplete="off"></label>
+          <label class="field" data-v="3"><span>Username</span><input id="username" autocomplete="off"></label>
+        </div>
+        <div class="grid2" data-v="3">
+          <label class="field"><span>Authentication</span><select id="auth_protocol"></select></label>
+          <label class="field"><span>Authentication password</span><input id="auth_password" type="password" autocomplete="off"></label>
+          <label class="field"><span>Privacy (encryption)</span><select id="priv_protocol"></select></label>
+          <label class="field"><span>Privacy password</span><input id="priv_password" type="password" autocomplete="off"></label>
+        </div>
+        <p class="hint" id="savedHint"></p>
+        <div class="actions">
+          <button class="btn primary" id="saveLogin" type="button">Save login</button>
+          <button class="btn danger-outline" id="forgetLogin" type="button">Forget saved login</button>
+        </div>
+        <div class="test-row">
+          <label class="field"><span>Try it on one switch</span><select id="testSwitch"></select></label>
+          <button class="btn" id="testBtn" type="button">Test</button>
+        </div>
+        <p class="test-result" id="testResult" aria-live="polite"></p>
+        <div class="notice" id="loginNotes" hidden></div>
+      </section>
+
+      <section class="panel stack" aria-labelledby="dailyTitle">
+        <div class="panel-head">
+          <h2 id="dailyTitle">Daily scan</h2>
+          <p>Windows Task Scheduler runs it as you, while you're logged on (the PC can be locked). If the PC is off or
+            you're logged out at that time, that day is skipped.</p>
+        </div>
+        <p class="status" id="schedStatus"><span class="led"></span><span id="schedText">Checking…</span></p>
+        <div class="grid2">
+          <label class="field"><span>Time</span><input id="time" type="time" value="10:00"></label>
+          <label class="field"><span>Days</span>
+            <select id="days"><option value="daily">Every day</option><option value="weekdays">Monday to Friday</option></select></label>
+        </div>
+        <div class="actions">
+          <button class="btn primary" id="schedOn" type="button">Turn on</button>
+          <button class="btn" id="schedOff" type="button">Turn off</button>
+        </div>
+        <div class="notice" id="schedNotes" hidden></div>
+        <details class="more" id="lastLogBox" hidden>
+          <summary id="lastLogSummary">Last scan's messages</summary>
+          <pre class="last-log mono" id="lastLog"></pre>
+        </details>
+        <hr style="border:0;border-top:1px solid var(--line-soft);margin:4px 0">
+        <div class="panel-head">
+          <h2>Scan now</h2>
+          <p id="scanHint">Every switch on the list, with the login above (typed or saved).</p>
+        </div>
+        <div class="actions">
+          <button class="btn primary big" id="runBtn" type="button">Scan now</button>
+          <button class="btn" id="stopBtn" type="button" hidden>Stop</button>
+        </div>
+        <div class="notice" id="runNotes" hidden></div>
+        <p class="hint" id="otherScan" hidden></p>
+        <div class="progress" id="progressBox" hidden>
+          <div class="progress-line"><span>Reading switches</span><span id="progressCount" class="mono"></span></div>
+          <div class="bar"><div class="fill" id="progressFill"></div></div>
+        </div>
+        <ol class="log mono" id="log" aria-live="polite"></ol>
+      </section>
+    </div>
+
+    <section class="panel" aria-labelledby="runsTitle">
+      <div class="panel-head">
+        <h2 id="runsTitle">Scans</h2>
+        <p>Saved in your data folder (<span class="mono">data\tracker\scans</span>). <strong>Open</strong> one to see what
+          changed and every device it found, or download its CSVs. Scans older than <span id="keepDays">90</span> days are
+          deleted by themselves; deleting a scan doesn't change what the tracker remembers.</p>
+      </div>
+      <div class="saved-bar" id="savedBar" hidden></div>
+      <ul class="runs" id="runs"></ul>
+      <p class="empty" id="runsEmpty">None yet. The first scan is the starting point; the next ones show what changed.</p>
+    </section>
+
+    <section class="panel" aria-labelledby="howTitle">
+      <div class="panel-head"><h2 id="howTitle">How it decides what moved</h2></div>
+      <ul class="rules">
+        <li><strong>Where a device is</strong>: the port where it said who it is (LLDP or CDP), otherwise the port where
+          the switch learned its MAC address. Ports that lead to another switch or an access point are skipped (MACs
+          there are only passing through), and so is a port with more than <span id="busyShown">40</span> MACs.</li>
+        <li><strong>Moved</strong>: seen on a different switch or port than the last place it was seen.
+          <strong>New</strong>: never seen before. <strong>VLAN changed</strong>: same port, different VLAN.</li>
+        <li><strong>Missing</strong>: not seen for <span id="missingShown">3</span> scans in a row on a switch that was
+          read fine (a switch that couldn't be read doesn't count against its devices). <strong>Back</strong>: seen again
+          after it went missing.</li>
+        <li>A device is known by its MAC address (or its name, when it only sent a name). A computer that plugs in by
+          Wi-Fi some days won't be on a switch port those days.</li>
+      </ul>
+      <details class="more">
+        <summary>Options</summary>
+        <div class="grid3" style="margin-top:12px">
+          <label class="field"><span>Missing after <em>(scans)</em></span><input id="missing_after" type="number" min="1" max="30"></label>
+          <label class="field"><span>Busy port limit <em>(MACs)</em></span><input id="busy_limit" type="number" min="2" max="1000"></label>
+          <label class="field"><span>Keep scans for <em>(days)</em></span><input id="keep_days" type="number" min="7" max="3650"></label>
+          <label class="field"><span>Forget a device after <em>(days unseen)</em></span><input id="forget_days" type="number" min="30" max="3650"></label>
+          <label class="field"><span>Switches at once</span><input id="parallel" type="number" min="1" max="50"></label>
+          <label class="field"><span>Timeout per request <em>(seconds)</em></span><input id="timeout" type="number" min="1" max="30"></label>
+        </div>
+        <div class="actions" style="margin-top:12px">
+          <button class="btn" id="saveOptions" type="button">Save options</button>
+          <button class="btn danger-outline" id="resetBtn" type="button">Start over…</button>
+          <span class="hint" id="historyHint"></span>
+        </div>
+        <div class="notice" id="optNotes" hidden style="margin-top:10px"></div>
+      </details>
+    </section>
+  </main>
+
+  <script>
+  (function () {
+    "use strict";
+    var $ = function (s) { return document.querySelector(s); };
+    var ORDER = ["moved", "new", "missing", "back", "vlan"];
+    var NAMES = { moved: "moved", new: "new", missing: "missing", back: "back", vlan: "VLAN changed" };
+    var state = { switches: [], setup: null, logNext: 0, timer: null, fresh: "" };
+    function el(tag, props, text) {
+      var e = document.createElement(tag);
+      Object.keys(props || {}).forEach(function (k) { e.setAttribute(k, props[k]); });
+      if (text !== undefined) e.textContent = text;
+      return e;
+    }
+    function plural(n, one, many) { return n + " " + (n === 1 ? one : many); }
+    function notice(box, kind, messages) {
+      box.textContent = "";
+      if (!messages || !messages.length) { box.hidden = true; return; }
+      box.className = "notice " + kind;
+      messages.forEach(function (m) { box.appendChild(el("p", {}, m)); });
+      box.hidden = false;
+    }
+    async function api(path, body) {
+      var opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+      try {
+        var res = await fetch(path, opts);
+        var data = await res.json();
+        return { ok: res.ok && data.ok !== false, data: data };
+      } catch (e) {
+        return { ok: false, data: { problems: ["Can't reach the app. Is the RunAnalyzer window still open?"] } };
+      }
+    }
+
+    // ---- the login ----
+    var FIELDS = ["version", "username", "auth_protocol", "priv_protocol"];
+    var SECRET = ["community", "auth_password", "priv_password"];
+    function login() {
+      var out = {};
+      FIELDS.concat(SECRET).forEach(function (k) { out[k] = $("#" + k).value; });
+      return out;
+    }
+    function showVersion() {
+      var v = $("#version").value;
+      document.querySelectorAll("[data-v]").forEach(function (e) { e.hidden = e.dataset.v !== v; });
+      savedHint();
+    }
+    function savedHint() {
+      var s = state.setup, saved = (s && s.saved) || {}, v = $("#version").value;
+      var need = v === "2c" ? ["community"] : ["auth_password", "priv_password"];
+      if ($("#version").value === "3") {
+        if ($("#auth_protocol").value === "none") need = need.filter(function (n) { return n !== "auth_password"; });
+        if ($("#priv_protocol").value === "none") need = need.filter(function (n) { return n !== "priv_password"; });
+      }
+      SECRET.forEach(function (k) { $("#" + k).placeholder = saved[k] ? "Saved (leave empty to keep it)" : ""; });
+      var all = need.every(function (n) { return saved[n]; });
+      if (s && s.store_problem) {
+        $("#savedHint").textContent = "Can't use Windows Credential Manager: " + s.store_problem;
+      } else {
+        $("#savedHint").textContent = all
+          ? "Saved in Windows Credential Manager, under your Windows account (not in the data folder). The daily scan uses it."
+          : "Not saved yet. Save it so the daily scan can use it: it goes in Windows Credential Manager, under your Windows account, never in the data folder or on GitHub.";
+      }
+    }
+    async function saveLogin() {
+      var body = login();
+      var r = await api("/api/tracker/setup", body);
+      if (!r.ok) { notice($("#loginNotes"), "error", r.data.problems || ["Couldn't save."]); return; }
+      SECRET.forEach(function (k) { $("#" + k).value = ""; });
+      state.setup.saved = r.data.saved;
+      state.setup.settings = r.data.settings;
+      notice($("#loginNotes"), "", ["Saved."]);
+      savedHint();
+    }
+    async function forgetLogin() {
+      var sure = await Saved.confirm({ title: "Forget the saved SNMP login?",
+        body: "The daily scan won't be able to run until you save one again.", yes: "Forget it" });
+      if (!sure) return;
+      var r = await api("/api/tracker/forget", {});
+      if (!r.ok) { notice($("#loginNotes"), "error", r.data.problems || ["Couldn't forget it."]); return; }
+      state.setup.saved = r.data.saved;
+      notice($("#loginNotes"), "", ["Forgotten."]);
+      savedHint();
+    }
+    async function test() {
+      var address = $("#testSwitch").value;
+      if (!address) return;
+      $("#testBtn").disabled = true;
+      $("#testResult").className = "test-result";
+      $("#testResult").textContent = "Asking " + address + "…";
+      var r = await api("/api/tracker/test", Object.assign({ address: address }, login()));
+      $("#testBtn").disabled = false;
+      if (!r.ok) {
+        $("#testResult").className = "test-result";
+        $("#testResult").textContent = "";
+        notice($("#loginNotes"), "error", r.data.problems || [r.data.problem || "It didn't answer."]);
+        return;
+      }
+      notice($("#loginNotes"), "", []);
+      var d = r.data;
+      $("#testResult").className = "test-result ok";
+      $("#testResult").textContent = "It answered: " + d.name + ", " + plural(d.ports, "port", "ports") + ", " +
+        plural(d.lldp, "LLDP neighbor", "LLDP neighbors") + ", " + plural(d.cdp, "CDP neighbor", "CDP neighbors") + ", " +
+        plural(d.macs, "MAC address", "MAC addresses") + " (" + d.seconds + " s). " + (d.notes || []).join(" ");
+    }
+
+    // ---- the daily scan ----
+    function showSchedule(s) {
+      var on = s && s.on;
+      $("#schedStatus").classList.toggle("on", !!on);
+      var set = state.setup ? state.setup.settings : {};
+      if (!s || !s.supported) {
+        $("#schedText").textContent = "Only on Windows (this computer can still scan by hand).";
+        $("#schedOn").disabled = $("#schedOff").disabled = true;
+        return;
+      }
+      $("#schedOn").textContent = on ? "Save time" : "Turn on";
+      $("#schedOff").hidden = !on;
+      $("#schedText").textContent = on
+        ? "On: " + (set.days === "weekdays" ? "Monday to Friday" : "every day") + " at " + set.time +
+          (s.next ? ". Next: " + s.next : "") + (s.enabled === false ? " (turned off in Task Scheduler)" : "")
+        : "Off";
+    }
+    async function setSchedule(on) {
+      var r = await api("/api/tracker/schedule", { on: on, time: $("#time").value, days: $("#days").value });
+      if (!r.ok) { notice($("#schedNotes"), "error", r.data.problems || ["Couldn't change it."]); return; }
+      notice($("#schedNotes"), "", [on ? "The daily scan is on." : "The daily scan is off."]);
+      if (on) { state.setup.settings.time = $("#time").value; state.setup.settings.days = $("#days").value; }
+      showSchedule(r.data.schedule);
+    }
+
+    // ---- scans ----
+    async function loadRuns() {
+      var got = (await api("/api/tracker/runs")).data || {};
+      var runs = got.runs || [];
+      Saved.bar($("#savedBar"), { kind: "tracker", total: got.total || 0, shown: runs.length, noun: ["scan", "scans"],
+                                  onChange: loadRuns });
+      var list = $("#runs");
+      list.textContent = "";
+      $("#runsEmpty").hidden = runs.length > 0;
+      runs.forEach(function (r) {
+        var li = el("li", { "class": r.run === state.fresh ? "fresh" : "" });
+        var head = el("div", { "class": "run-head" });
+        head.appendChild(el("strong", {}, r.created));
+        head.appendChild(el("span", { "class": "tag" }, r.source === "scheduled" ? "Daily" : "By hand"));
+        head.appendChild(el("span", { "class": "hint" }, r.read + " of " + plural(r.switches, "switch", "switches") + " read · " +
+          plural(r.devices, "device", "devices")));
+        head.appendChild(Saved.deleteButton({ kind: "tracker", name: r.run, label: "the scan from " + r.created, onChange: loadRuns }));
+        li.appendChild(head);
+        var counts = el("div", { "class": "counts" });
+        if (r.baseline) counts.appendChild(el("span", {}, "First scan: the starting point"));
+        else {
+          var any = false;
+          ORDER.forEach(function (k) {
+            var n = (r.counts || {})[k] || 0;
+            if (!n) return;
+            any = true;
+            var s = el("span");
+            s.appendChild(el("i", { "class": "dot c-" + k, "aria-hidden": "true" }));
+            s.appendChild(document.createTextNode(n + " " + NAMES[k]));
+            counts.appendChild(s);
+          });
+          if (!any) counts.appendChild(el("span", {}, "No changes"));
+        }
+        li.appendChild(counts);
+        var links = el("div", { "class": "run-links" });
+        links.appendChild(el("a", { "class": "btn primary", href: "/tracker/view/" + r.run, target: "_blank", rel: "noopener" }, "Open"));
+        links.appendChild(el("a", { "class": "btn", href: "/tracker/download/" + r.run + "/changes" }, "Changes CSV"));
+        links.appendChild(el("a", { "class": "btn", href: "/tracker/download/" + r.run + "/devices" }, "Devices CSV"));
+        li.appendChild(links);
+        if (r.failed && r.failed.length) {
+          var ul = el("ul", { "class": "run-failed" });
+          r.failed.slice(0, 5).forEach(function (f) {
+            ul.appendChild(el("li", {}, "Not read: " + (f.name !== f.address ? f.name + " (" + f.address + ")" : f.address) + ". " + f.problem));
+          });
+          if (r.failed.length > 5) ul.appendChild(el("li", {}, "and " + (r.failed.length - 5) + " more (open the scan)"));
+          li.appendChild(ul);
+        }
+        list.appendChild(li);
+      });
+    }
+
+    // ---- scanning from here ----
+    function setRunning(running) {
+      $("#runBtn").disabled = running;
+      $("#runBtn").textContent = running ? "Scanning…" : "Scan now";
+      $("#stopBtn").hidden = !running;
+      $("#stopBtn").disabled = false;
+      $("#progressBox").hidden = !running;
+    }
+    async function poll() {
+      clearTimeout(state.timer);
+      var data = (await api("/api/tracker/job?since=" + state.logNext)).data;
+      if (!data || !data.state) { state.timer = setTimeout(poll, 2000); return; }
+      var log = $("#log");
+      var atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
+      data.lines.forEach(function (line) {
+        var li = el("li", { "class": line.level });
+        li.appendChild(el("time", {}, line.t));
+        li.appendChild(el("span", {}, line.msg));
+        log.appendChild(li);
+      });
+      if (atBottom) log.scrollTop = log.scrollHeight;
+      state.logNext = data.next;
+      var p = data.progress;
+      $("#progressCount").textContent = p.total ? p.done + " of " + p.total : "";
+      $("#progressFill").style.width = p.total ? Math.round(100 * p.done / p.total) + "%" : "0";
+      if (data.state === "running") { setRunning(true); state.timer = setTimeout(poll, 1000); return; }
+      setRunning(false);
+      watchOther(data.scheduled);
+      if (data.state === "done" && data.report_file) {
+        state.fresh = data.report_file;
+        await loadRuns();
+      }
+    }
+    function watchOther(other) {        // the daily scan, running in its own window
+      var box = $("#otherScan");
+      if (!other) {
+        if (!box.hidden) { box.hidden = true; loadRuns(); }
+        return;
+      }
+      var p = other.progress || {};
+      box.hidden = false;
+      box.textContent = "The daily scan is running now" + (p.total ? ": " + p.done + " of " + p.total + " switches." : ".");
+      $("#runBtn").disabled = true;
+      state.timer = setTimeout(async function () {
+        var d = (await api("/api/tracker/job?since=" + state.logNext)).data || {};
+        if (!d.scheduled) $("#runBtn").disabled = false;
+        watchOther(d.scheduled);
+      }, 3000);
+    }
+    async function start() {
+      var r = await api("/api/tracker/run", login());
+      if (!r.ok) { notice($("#runNotes"), "error", r.data.problems || ["Couldn't start."]); return; }
+      notice($("#runNotes"), "", []);
+      $("#log").textContent = "";
+      state.logNext = 0;
+      setRunning(true);
+      poll();
+    }
+
+    // ---- options ----
+    var OPTIONS = ["missing_after", "busy_limit", "keep_days", "forget_days", "parallel", "timeout"];
+    function showOptions(set) {
+      OPTIONS.forEach(function (k) { $("#" + k).value = set[k]; });
+      $("#missingShown").textContent = set.missing_after;
+      $("#busyShown").textContent = set.busy_limit;
+      $("#keepDays").textContent = set.keep_days;
+    }
+    async function saveOptions() {
+      var body = {};
+      OPTIONS.forEach(function (k) { body[k] = $("#" + k).value; });
+      var r = await api("/api/tracker/setup", body);
+      if (!r.ok) { notice($("#optNotes"), "error", r.data.problems || ["Couldn't save."]); return; }
+      state.setup.settings = r.data.settings;
+      showOptions(r.data.settings);
+      notice($("#optNotes"), "", ["Saved."]);
+    }
+    async function reset() {
+      var sure = await Saved.confirm({ title: "Start over?",
+        body: "The tracker forgets where every device was. The next scan becomes the new starting point. Saved scans and their CSVs stay.",
+        yes: "Start over" });
+      if (!sure) return;
+      var r = await api("/api/tracker/reset", { confirm: true });
+      notice($("#optNotes"), r.ok ? "" : "error", r.ok ? ["Done. The next scan is the new starting point."] : (r.data.problems || ["Couldn't."]));
+      if (r.ok) $("#historyHint").textContent = "";
+    }
+
+    async function init() {
+      var data = (await api("/api/state")).data || {};
+      state.switches = data.switches || [];
+      var setup = (await api("/api/tracker/setup")).data || {};
+      state.setup = setup;
+      var set = setup.settings || {};
+      (setup.auth || []).forEach(function (a) { $("#auth_protocol").appendChild(el("option", { value: a }, a === "none" ? "None" : a)); });
+      (setup.priv || []).forEach(function (a) { $("#priv_protocol").appendChild(el("option", { value: a }, a === "none" ? "None" : a)); });
+      FIELDS.forEach(function (k) { if (set[k] !== undefined) $("#" + k).value = set[k]; });
+      $("#time").value = set.time || "10:00";
+      $("#days").value = set.days || "daily";
+      showOptions(set);
+      showVersion();
+      $("#historyHint").textContent = setup.history ? "It remembers " + setup.history.toLocaleString() + " devices." : "";
+      var sel = $("#testSwitch");
+      var TYPE = { cisco_ios: "Cisco Catalyst", cisco_nxos: "Cisco Nexus", dell_powerconnect: "Dell", aruba_mas: "Aruba" };
+      SwitchPicker.sortSwitches(state.switches).forEach(function (s) {
+        if (s.address) sel.appendChild(SwitchPicker.option(s, s.address, TYPE[s.type]));
+      });
+      SwitchPicker.attach(sel);
+      $("#testBtn").disabled = !state.switches.length;
+      $("#scanHint").textContent = state.switches.length
+        ? "All " + plural(state.switches.length, "switch", "switches") + " on the list, with the login above (typed or saved). A scan by hand counts like the daily one."
+        : "No switches yet. Add them on the Port Analyzer page under Switch list.";
+      showSchedule(setup.schedule);
+      if (setup.last_log && setup.last_log.lines && setup.last_log.lines.length) {
+        $("#lastLogBox").hidden = false;
+        $("#lastLogSummary").textContent = "Messages from the last daily scan (" + setup.last_log.when + ")";
+        $("#lastLog").textContent = setup.last_log.lines.join("\n");
+      }
+      await loadRuns();
+      var job = (await api("/api/tracker/job?since=0")).data;
+      if (job && job.state === "running") { state.logNext = 0; poll(); }
+      else if (job) watchOther(job.scheduled);
+    }
+
+    $("#version").addEventListener("change", showVersion);
+    $("#auth_protocol").addEventListener("change", savedHint);
+    $("#priv_protocol").addEventListener("change", savedHint);
+    $("#saveLogin").addEventListener("click", saveLogin);
+    $("#forgetLogin").addEventListener("click", forgetLogin);
+    $("#testBtn").addEventListener("click", test);
+    $("#schedOn").addEventListener("click", function () { setSchedule(true); });
+    $("#schedOff").addEventListener("click", function () { setSchedule(false); });
+    $("#runBtn").addEventListener("click", start);
+    $("#stopBtn").addEventListener("click", function () { $("#stopBtn").disabled = true; api("/api/tracker/stop", {}); });
+    $("#saveOptions").addEventListener("click", saveOptions);
+    $("#resetBtn").addEventListener("click", reset);
+    init();
+  })();
+  </script>
+</body>
+</html>
