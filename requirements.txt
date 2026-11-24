@@ -7,3 +7,8 @@ openpyxl>=3.1,<4
 # algorithms first and only falls back to those when the switch offers nothing else,
 # the same way PuTTY does.
 paramiko>=3.5.1,<4
+# Device tracker: SNMP (read-only) and saving its login in Windows Credential Manager.
+# On Python 3.9, pip picks pysnmp 7.1.21, which needs a cryptography older than 49 for SNMPv3 encryption.
+pysnmp>=7.1.21,<8
+cryptography<49; python_version < "3.10"
+keyring>=24,<26
