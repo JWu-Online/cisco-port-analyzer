@@ -175,6 +175,20 @@ def is_network_gear(nb):
     return bool(letters & {"B", "R"}) and not letters & {"W", "T", "A", "P"}
 
 
+def guess_type(model):
+    """The switch type for the switch list, from a model or a system description ('' if it can't tell)."""
+    model = model or ""
+    if re.search(r"(?i)nexus|nx-os|\bn[3579]k\b|\bn[3579]k-|\bN77-", model):
+        return "cisco_nxos"
+    if re.search(r"(?i)powerconnect|\b55(?:24|48)p?\b", model):
+        return "dell_powerconnect"
+    if re.search(r"(?i)arubas\d|\bs[123]500\b|mobility access", model):
+        return "aruba_mas"
+    if re.search(r"(?i)^(?:cisco\s+)?(?:WS-C|C9[2-6]\d{2}|C[1-6]\d{3}|IE-?\d|ME-|CDB-)|catalyst|cisco ios", model):
+        return "cisco_ios"
+    return ""
+
+
 def is_switch(nb):
     """A neighbor that says it's a switch (CDP 'Switch', LLDP 'B' for bridge)."""
     return bool(re.search(r"(?i)\bswitch\b|\bB\b", nb["caps"]))
@@ -429,14 +443,17 @@ def build_map(results, overrides=None, scope="", now=None, also_draw=None, whole
     links = {}
     link_ports = {}                                         # node -> ports that lead to another node
     counts = {r["switch"]["address"]: 0 for r in results if r.get("outputs")}
+    seen_at = {}                                            # a listed switch that couldn't be read -> where it's seen
     for here, nb in reported:
         counts[here] = counts.get(here, 0) + 1
         link_ports.setdefault(here, set()).add(analyzer.match_key(nb["local"]))       # leads somewhere else
         there = resolve(nb)
         if there is None or there == here:
             continue
-        if not nodes[there]["listed"] and nodes[here]["name"] not in nodes[there]["seen_by"]:
+        if not nodes[there]["read"] and nodes[here]["name"] not in nodes[there]["seen_by"]:
             nodes[there]["seen_by"].append(nodes[here]["name"])
+        if nodes[there]["listed"] and not nodes[there]["read"] and nb["ip"] and nb["ip"] != nodes[there]["address"]:
+            seen_at.setdefault(there, set()).add(nb["ip"])       # its neighbors see it at another address
         a, b = sorted([(here, _port(nb["local"])), (there, _port(nb["port"]))])
         entry = links.setdefault((a[0], b[0]), {"a": a[0], "b": b[0], "pairs": {}})
         entry["pairs"].setdefault((a[1], b[1]), set()).add(nb["source"])
@@ -513,8 +530,8 @@ def build_map(results, overrides=None, scope="", now=None, also_draw=None, whole
         names = sorted((n["name"] for n in extra), key=str.lower)
         warnings.append(f"Drawn dashed: {len(names)} switch(es) in {ranges} that aren't on your list "
                         f"({', '.join(names[:8])}{' ...' if len(names) > 8 else ''}). They weren't logged into, so "
-                        "only their links to your switches are shown; add them to the switch list to see what's "
-                        "plugged into them.")
+                        "only their links to your switches are shown. Add them to the switch list (the Network map "
+                        "page offers them under 'Update your switch list') to see what's plugged into them.")
     if left_out:
         names = sorted(left_out, key=str.lower)
         warnings.append(f"Not drawn: {len(names)} neighbor(s) that call themselves switches but aren't on your list"
@@ -530,6 +547,7 @@ def build_map(results, overrides=None, scope="", now=None, also_draw=None, whole
                           "mac": all(p["found_by"] == "MAC table" for p in pairs)})
     listed = [n for n in nodes.values() if n["listed"]]
     return {
+        "suggestions": _suggestions(nodes, adjacency, seen_at),
         "title": "Network map", "source": scope, "drawn": now.strftime("%Y-%m-%d %H:%M"), "web": "",
         "ranges": ranges,
         "nodes": sorted(nodes.values(), key=lambda n: (n["building"], n["location"], n["name"].lower())),
@@ -572,12 +590,50 @@ def render_html(data):
     return env.get_template("network.html").render(data=data, data_json=data_json)
 
 
+def _suggestions(nodes, adjacency, seen_at):
+    """What the map found that could make the switch list better:
+    add   switches it found (in the address range) that aren't on the list, with a type, if it can tell
+    fix   switches on the list it couldn't log into, that their neighbors see at another address
+    gone  switches on the list it couldn't log into and that no other switch sees"""
+    add = [{"address": n["address"], "name": n["name"], "model": n["model"], "type": guess_type(n["model"]),
+            "building": n["building"], "seen_by": n["seen_by"]}
+           for n in nodes.values() if not n["on_list"]]
+    fix, gone = [], []
+    for n in nodes.values():
+        if not n["listed"] or n["read"]:
+            continue
+        ips = sorted(seen_at.get(n["id"], ()))
+        if len(ips) == 1:
+            fix.append({"name": n["name"], "old": n["address"], "new": ips[0], "seen_by": n["seen_by"],
+                        "problem": n["problem"]})
+        elif not adjacency[n["id"]]:
+            gone.append({"name": n["name"], "address": n["address"], "problem": n["problem"]})
+    key = lambda x: (not x.get("building"), x.get("building", ""), x["name"].lower())   # no building: last
+    return {"add": sorted(add, key=key), "fix": sorted(fix, key=key), "gone": sorted(gone, key=key)}
+
+
 def save_page(data_dir, html, stamp=None):
     pages = Path(data_dir) / "pages"
     pages.mkdir(parents=True, exist_ok=True)
     path = pages / f"network-{(stamp or datetime.now()):%Y%m%d-%H%M%S}.html"
     path.write_text(html, encoding="utf-8")
     return path
+
+
+def save_suggestions(data_dir, data, page):
+    """The latest map's ideas for the switch list (the Network map page offers them)."""
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
+    (Path(data_dir) / "suggestions.json").write_text(json.dumps(
+        {"drawn": data["drawn"], "scope": data["source"], "page": page, "ranges": data["ranges"],
+         **data["suggestions"]}, indent=2), encoding="utf-8")
+
+
+def load_suggestions(data_dir):
+    path = Path(data_dir) / "suggestions.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
 
 
 def list_pages(data_dir, limit=15):
@@ -638,6 +694,7 @@ def run_job(job, switch_list, logins, settings, data_dir, debug_dir, scope_label
         data = build_map(results, load_overrides(data_dir), scope_label, also_draw=also_draw, whole_list=whole_list)
         path = save_page(data_dir, render_html(data))
         job.report_file = path
+        save_suggestions(data_dir, data, path.name)
         analyzer.share_learned(job, learn, {r["switch"]["address"]: {"name": r["outputs"].get("prompt", ""),
                                                                      "location": r["outputs"].get("location", "")}
                                             for r in results if r["outputs"]})

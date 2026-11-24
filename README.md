@@ -194,6 +194,13 @@ Click **Network map** at the top of the page to see **which of your switches con
 
 **Notes at the top of the map** tell you about anything to check: a switch that refused the login (still drawn where its neighbours say it is, with a red **!**), a switch on your list that isn't linked to anything, the switches drawn dashed, and any neighbour that **calls itself a switch but is outside the range**. That last one is named so you can add it to the switch list if it's really yours; it isn't drawn. A dashed switch is put in the building of the closet it's plugged into; one plugged straight into the core goes in a "Not on your list" group at the end.
 
+**Update your switch list from the map.** After a map is drawn, the Network map page shows **Update your switch list** with what the map found:
+- **Switches that aren't on your list** (the dashed ones, in your address range): name, address, model, a type worked out from the model, and the building of the closet it hangs off. Tick the ones to add (change the type or building if you need to) and click **Add**. They get the same connection (SSH or telnet) as your other switches of that type, and their Location fills in from the switch the first time it's read.
+- **Switches on your list whose neighbors see them at another address**: the map couldn't log in at the address on your list, but the switch next to it reports it somewhere else (it was probably moved or re-addressed). Tick one to change its address on your list.
+- **Switches on your list that nothing answers and no switch sees**: listed so you can check them and delete the ones that are gone.
+
+Nothing on your list is ever replaced by this, and nothing is added twice: an address that's already on the list, or a name that's already on it at another address, is skipped and it says why. The map only logs into switches on your list, so draw it again after adding some: it reads them and may find more switches behind them.
+
 Mapping just one building still draws the core switches it's plugged into, as yours, from the switch list.
 
 ## How it knows when a port was last used
