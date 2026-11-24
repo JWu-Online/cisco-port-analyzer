@@ -149,6 +149,22 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--focus); out
 .btn.small { padding: 3px 10px; font-size: 0.83rem; font-weight: 500; }
 .btn.quiet { border-color: transparent; background: transparent; color: var(--ink-2); }
 .btn.quiet:hover { color: var(--danger); }
+.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.danger:hover { filter: brightness(0.92); }
+.btn.danger-outline { color: var(--danger); border-color: var(--line); background: transparent; }
+.btn.danger-outline:hover { border-color: var(--danger); }
+.btn.del { margin-left: auto; }
+
+/* Saved runs: "12 saved" and Delete all over a list (static/saved.js), and the are-you-sure dialog */
+.saved-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 10px; }
+.saved-bar[hidden] { display: none; }
+dialog.confirm { border: 1px solid var(--line); border-radius: 8px; padding: 22px 24px 18px; max-width: 440px;
+  background: var(--surface); color: var(--ink); box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28); }
+dialog.confirm::backdrop { background: rgba(15, 22, 30, 0.45); }
+dialog.confirm h2 { font-size: 1.1rem; margin: 0 0 8px; }
+dialog.confirm p { margin: 0 0 18px; color: var(--ink-2); }
+.confirm-actions { display: flex; gap: 10px; justify-content: flex-end; }
 .link { font: inherit; background: none; border: none; padding: 0; color: var(--action); cursor: pointer; font-weight: 600; }
 .link:hover { text-decoration: underline; }
 .hint { color: var(--ink-3); font-size: 0.88rem; }
@@ -389,3 +405,12 @@ a.link { text-decoration: none; }
 a.link:hover { text-decoration: underline; }
 .topbar > a.link { display: inline-block; margin-bottom: 6px; font-size: 0.9rem; }
 .recent { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.recent > li { display: flex; align-items: baseline; gap: 6px; max-width: 560px; }
+
+/* Saved reports on the main page */
+.saved-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.saved-list > li { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft); }
+.saved-list > li:last-child { border-bottom: 0; }
+.saved-list .what { color: var(--ink-2); }
+.saved-list .showing { font-size: 0.8rem; font-weight: 600; color: var(--found); }

@@ -7,6 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='22' rx='3' fill='%231C2833'/%3E%3Crect x='6' y='12' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='13' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='20' y='12' width='5' height='4' fill='%234A5662'/%3E%3Crect x='6' y='19' width='5' height='4' fill='%234A5662'/%3E%3Crect x='13' y='19' width='5' height='4' fill='%232E9E4F'/%3E%3Crect x='20' y='19' width='5' height='4' fill='%23D9822B'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/picker.js"></script>
+  <script src="/static/saved.js"></script>
   <style>
     .runs { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
     .runs > li { border: 1px solid var(--line-soft); border-radius: 6px; padding: 10px 14px; display: grid; gap: 6px; }
@@ -74,6 +75,7 @@
         <h2 id="runsTitle">CSVs</h2>
         <p>Saved in your data folder (<span class="mono">data\docs</span>). Download one CSV with every switch, or a .zip with one CSV per switch.</p>
       </div>
+      <div class="saved-bar" id="savedBar" hidden></div>
       <ul class="runs" id="runs"></ul>
       <p class="empty" id="runsEmpty">None yet.</p>
       <details class="more">
@@ -150,7 +152,10 @@
 
     // ---- earlier runs ----
     async function loadRuns() {
-      var runs = (await api("/api/docs/runs")).data.runs || [];
+      var got = (await api("/api/docs/runs")).data || {};
+      var runs = got.runs || [];
+      Saved.bar($("#savedBar"), { kind: "docs", total: got.total || 0, shown: runs.length, noun: ["run", "runs"],
+                                  onChange: loadRuns });
       var list = $("#runs");
       list.textContent = "";
       $("#runsEmpty").hidden = runs.length > 0;
@@ -158,8 +163,10 @@
         var li = el("li", { "class": r.run === state.fresh ? "fresh" : "" });
         var head = el("div", { "class": "run-head" });
         head.appendChild(el("strong", {}, r.created));
+        var del = Saved.deleteButton({ kind: "docs", name: r.run, label: "the run from " + r.created, onChange: loadRuns });
         head.appendChild(el("span", { "class": "hint" }, r.scope + " · " + plural(r.switches, "switch", "switches") +
           ", " + plural(r.ports, "port", "ports") + " · unused after " + r.months + " months"));
+        head.appendChild(del);
         li.appendChild(head);
         var links = el("div", { "class": "run-links" });
         links.appendChild(el("a", { "class": "btn primary", href: "/port-docs/download/" + r.run + "/all" }, "One CSV, every switch"));

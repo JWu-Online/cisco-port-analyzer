@@ -10,6 +10,7 @@ import csv
 import json
 import os
 import re
+import shutil
 import socket
 import sys
 import threading
@@ -179,6 +180,75 @@ def report_path(name=None):
     return files[-1] if files else None
 
 
+# ---------------------------------------------------------------------------
+# Saved runs: listing and deleting what the tools saved (one at a time, or all of one kind)
+# ---------------------------------------------------------------------------
+SAVED = {   # kind: where it's saved and what its names look like. Nothing else in those folders is touched.
+    "reports": {"dir": REPORTS_DIR, "name": r"report-\d{8}-\d{6}\.json"},
+    "topology": {"dir": TOPOLOGY_DIR / "pages", "name": r"[\w.-]+-\d{8}-\d{6}\.html"},
+    "docs": {"dir": DOCS_DIR, "name": r"\d{8}-\d{6}", "folder": True},
+    "lldp": {"dir": LLDP_DIR, "name": r"\d{8}-\d{6}", "folder": True},
+    "network": {"dir": NETWORK_DIR / "pages", "name": r"network-\d{8}-\d{6}\.html"},
+}
+
+
+def saved_items(kind):
+    """Every saved run of one kind, sorted by name. A run of Port documentation or LLDP neighbors is a folder."""
+    spec = SAVED[kind]
+    if not spec["dir"].is_dir():
+        return []
+    found = []
+    for path in spec["dir"].iterdir():
+        if not re.fullmatch(spec["name"], path.name) or path.is_symlink():
+            continue
+        if spec.get("folder") and path.is_dir() and (path / "run.json").is_file():
+            found.append(path)
+        elif not spec.get("folder") and path.is_file():
+            found.append(path)
+    return sorted(found)
+
+
+def _delete(path, folder):
+    """Delete one saved run. '' when it's gone, or what went wrong (a CSV still open in Excel, say)."""
+    try:
+        shutil.rmtree(path) if folder else path.unlink()
+        return ""
+    except OSError as exc:
+        return (f"Couldn't delete {path.name}: {exc.strerror or exc}. If it's open in another program "
+                "(Excel, a browser), close it and try again.")
+
+
+def delete_saved(kind, name):
+    """(found, problem). `name` comes from the browser, so only a name in the list can be deleted."""
+    if kind not in SAVED or not isinstance(name, str):
+        return False, ""
+    match = [p for p in saved_items(kind) if p.name == name]
+    if not match:
+        return False, ""
+    return True, _delete(match[0], SAVED[kind].get("folder", False))
+
+
+def report_list(limit=30):
+    """The newest saved Port Analyzer reports: file, when, what was checked, months. Reads only their start."""
+    out = []
+    for path in reversed(saved_items("reports")[-limit:] if limit else saved_items("reports")):
+        with open(path, encoding="utf-8") as f:
+            head = f.read(2000)
+        info = {"file": path.name, "created": "", "scope": "", "months": ""}
+        for key in ("created", "scope"):
+            m = re.search(r'"' + key + r'":\s*"((?:[^"\\]|\\.)*)"', head)
+            if m:
+                info[key] = json.loads(f'"{m.group(1)}"')
+        m = re.search(r'"months":\s*([\d.]+)', head)
+        info["months"] = m.group(1) if m else ""
+        if not info["created"]:
+            stamp = re.search(r"(\d{8})-(\d{4})", path.name)
+            info["created"] = datetime.strptime(stamp.group(1) + stamp.group(2), "%Y%m%d%H%M").strftime(
+                "%Y-%m-%d %H:%M") if stamp else path.stem
+        out.append(info)
+    return out
+
+
 def parse_months(value):
     months = float(value)
     if not 0.5 <= months <= 120:
@@ -280,6 +350,43 @@ def job_status():
     return jsonify(job.snapshot(int(request.args.get("since", 0))))
 
 
+@app.get("/api/reports")
+def reports():
+    return jsonify({"reports": report_list(), "total": len(saved_items("reports"))})
+
+
+@app.post("/api/saved/delete")
+def saved_delete():
+    """Delete one saved run: {"kind": "reports"|"topology"|"docs"|"lldp"|"network", "name": its file or folder}."""
+    payload = request.json or {}
+    kind = str(payload.get("kind", ""))
+    found, problem = delete_saved(kind, payload.get("name"))
+    if not found:
+        return jsonify({"ok": False, "problems": ["That one is already gone."]}), 404
+    if problem:
+        return jsonify({"ok": False, "problems": [problem]}), 409
+    return jsonify({"ok": True, "left": len(saved_items(kind))})
+
+
+@app.post("/api/saved/delete-all")
+def saved_delete_all():
+    """Delete every saved run of one kind. The page asks first; this also wants "confirm": true."""
+    payload = request.json or {}
+    kind = str(payload.get("kind", ""))
+    if kind not in SAVED:
+        abort(404)
+    if payload.get("confirm") is not True:
+        return jsonify({"ok": False, "problems": ["Say you're sure (confirm: true) to delete them all."]}), 400
+    deleted, problems = 0, []
+    for path in saved_items(kind):
+        problem = _delete(path, SAVED[kind].get("folder", False))
+        if problem:
+            problems.append(problem)
+        else:
+            deleted += 1
+    return jsonify({"ok": not problems, "deleted": deleted, "problems": problems}), (409 if problems else 200)
+
+
 @app.get("/api/report")
 def get_report():
     path = report_path(request.args.get("file"))
@@ -343,7 +450,7 @@ def topology_form():
 
 @app.get("/api/topology/pages")
 def topology_pages():
-    return jsonify({"pages": topology.list_pages(TOPOLOGY_DIR)})
+    return jsonify({"pages": topology.list_pages(TOPOLOGY_DIR), "total": len(saved_items("topology"))})
 
 
 @app.post("/api/topology")
@@ -491,7 +598,7 @@ def docs_status():
 
 @app.get("/api/docs/runs")
 def docs_runs():
-    return jsonify({"runs": portdocs.list_runs(DOCS_DIR)})
+    return jsonify({"runs": portdocs.list_runs(DOCS_DIR), "total": len(saved_items("docs"))})
 
 
 @app.get("/port-docs/download/<run>/<kind>")
@@ -557,7 +664,7 @@ def lldp_job_status():
 
 @app.get("/api/lldp/runs")
 def lldp_runs():
-    return jsonify({"runs": lldp.list_runs(LLDP_DIR)})
+    return jsonify({"runs": lldp.list_runs(LLDP_DIR), "total": len(saved_items("lldp"))})
 
 
 @app.get("/lldp/view/<run>")
@@ -643,7 +750,7 @@ def network_status():
 
 @app.get("/api/network/pages")
 def network_pages():
-    return jsonify({"pages": network.list_pages(NETWORK_DIR)})
+    return jsonify({"pages": network.list_pages(NETWORK_DIR), "total": len(saved_items("network"))})
 
 
 @app.get("/network/page/<name>")

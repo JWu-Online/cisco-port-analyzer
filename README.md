@@ -213,6 +213,17 @@ Each type of switch keeps track differently:
 
 Your switch list, settings, saved reports, Stack topology drawings, Port documentation CSVs, LLDP neighbor runs, Network maps and any debug output live in the `data` folder next to the app. Git ignores that folder, so none of it ends up on GitHub, and updating the app never touches it.
 
+### Deleting saved runs
+
+Every list of saved runs has a **Delete** button on each one, and **Delete all** above the list:
+- **Saved reports** at the bottom of the main page (each check you've run; **Open** shows an earlier one in Results)
+- **Earlier drawings** on Stack topology
+- **CSVs** on Port documentation
+- **Runs** on LLDP neighbors
+- **Maps** on Network map
+
+**Delete** removes that one right away. **Delete all** asks first ("Are you sure?"), and it deletes every saved run of that kind, including older ones the list doesn't show. Only what that tool saved is deleted: your switch list, settings, Network map layer choices and what Stack topology remembers about each switch stay. If a file can't be deleted because it's open (a CSV in Excel, say), it says so; close it and try again.
+
 ## Updating
 
 - Cloned with Git: double-click `update.bat` (or run `git pull`).
@@ -260,7 +271,7 @@ network.py          Network map: CDP/LLDP from the switches on the list, plus un
 network_demo.py     the made-up campus (switch outputs) for the sample map and the tests
 topology.py         Stack topology: reading a Cisco or Dell stack, deciding each port, PoE and error checks, the cable test, Cisco/Dell config translation, the saved page
 topology_demo.py    made-up Cisco and Dell stacks for the example pages and the tests
-templates/, static/ the pages
+templates/, static/ the pages (static/saved.js: the Delete / Delete all buttons and the are-you-sure dialog)
 examples/           a made-up switch list
 tests/              pretend switches, sample output for each type, end-to-end tests
 ```
@@ -272,6 +283,7 @@ tests/              pretend switches, sample output for each type, end-to-end te
 .venv\Scripts\python tests\test_portdocs.py
 .venv\Scripts\python tests\test_network.py
 .venv\Scripts\python tests\test_lldp.py
+.venv\Scripts\python tests\test_saved.py
 ```
 
 **Add a switch type:** in `switches.py`, add it to `TYPES`, `MODELS` and `DRIVERS`. In `analyzer.py`, write a reader that returns each port's status, VLAN, description and when it was last used (or that it was never used, and how far back the switch can see), and add it to `READERS`. Put sample output in `tests/samples.py` and the expected answers next to it.

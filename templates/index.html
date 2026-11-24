@@ -158,9 +158,20 @@
         <p class="empty" id="noMatches" hidden>No ports match these filters.</p>
       </div>
     </section>
+
+    <section class="panel" aria-labelledby="savedTitle">
+      <div class="panel-head">
+        <h2 id="savedTitle">Saved reports</h2>
+        <p>Every check is saved in your data folder (<span class="mono">data\reports</span>). Open an earlier one, or delete the ones you don't need.</p>
+      </div>
+      <div class="saved-bar" id="savedBar" hidden></div>
+      <ul class="saved-list" id="savedReports"></ul>
+      <p class="empty" id="savedEmpty">None yet.</p>
+    </section>
   </main>
 
   <script src="/static/picker.js"></script>
+  <script src="/static/saved.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
