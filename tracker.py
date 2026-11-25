@@ -464,7 +464,8 @@ def compare(devices, results, history, settings, now):
     for key, d in devices.items():
         here = [where(p) for p in d["places"]]
         before = old.get(key)
-        entry = {"mac": d["mac"], "name": d["name"], "ip": d["ip"], "kind": d["kind"], "model": d["model"],
+        entry = {"mac": d["mac"], "name": d["name"], "name_from": d.get("name_from", ""), "ip": d["ip"],
+                 "kind": d["kind"], "model": d["model"],
                  "places": here, "first_seen": before["first_seen"] if before else stamp, "last_seen": stamp,
                  "missed": 0, "missing": False}
         kept[key] = entry
@@ -495,7 +496,7 @@ def compare(devices, results, history, settings, now):
         entry = dict(before)
         kept[key] = entry
         place = (before.get("places") or [{}])[0]
-        found_by_mac_only = not before.get("name")
+        found_by_mac_only = not before.get("name") or before.get("name_from") == "DHCP"
         counted = place.get("switch") in (complete if found_by_mac_only else read)
         if not counted:
             continue                                     # its switch wasn't read this time: no news isn't bad news
@@ -820,7 +821,8 @@ def _dhcp_script(servers):
     names = ", ".join(f"'{s}'" for s in servers)          # already checked by parse_servers: no quotes possible
     return f"""
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
 $out = New-Object System.Collections.ArrayList
 foreach ($s in @({names})) {{
   try {{
@@ -831,7 +833,8 @@ foreach ($s in @({names})) {{
           expires = $(if ($_.LeaseExpiryTime) {{ $_.LeaseExpiryTime.ToString('s') }} else {{ '' }}) }})
       }}
   }} catch {{
-    [void]$out.Add([pscustomobject]@{{ server = $s; error = $_.Exception.Message }})
+    [void]$out.Add([pscustomobject]@{{ server = $s; error = $_.Exception.Message;
+      id = [string]$_.FullyQualifiedErrorId; category = [string]$_.CategoryInfo.Category }})
   }}
 }}
 ConvertTo-Json -InputObject @($out) -Compress
@@ -841,7 +844,7 @@ ConvertTo-Json -InputObject @($out) -Compress
 def _powershell(args, timeout):
     import subprocess
     flags = {"creationflags": 0x08000000} if os.name == "nt" else {}      # no window
-    r = subprocess.run(args, capture_output=True, timeout=timeout, **flags)
+    r = subprocess.run(args, capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout, **flags)
     return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
 
 
@@ -862,13 +865,31 @@ def pick_leases(rows):
     return {mac: lease for mac, (_rank, lease) in best.items()}
 
 
-def _dhcp_problem(server, error):
-    low = error.lower()
-    if "is not recognized" in low or "commandnotfound" in low:
+def _dhcp_problem(server, error, error_id="", category=""):
+    """Why a server's lookup failed, in plain words. The DHCP cmdlets put the reason in the error's id
+    ('WIN32 5,...') and category, not in the message."""
+    low, eid = error.lower(), (error_id or "").upper()
+    if "COMMANDNOTFOUND" in eid or "is not recognized" in low:
         return "The DHCP PowerShell tools (RSAT) aren't installed on this PC, so no names came from DHCP."
-    if "access is denied" in low or "accessdenied" in low or "permission" in low:
-        return f"Your Windows account can't read DHCP on {server}."
+    if eid.startswith("WIN32 5,") or category == "PermissionDenied" or "access is denied" in low:
+        return (f"Your Windows account can't read DHCP on {server}. Ask for it to be added to the DHCP Users group "
+                "(read-only).")
+    if eid.startswith(("WIN32 1722,", "WIN32 1753,")) or category == "ConnectionError":
+        return f"{server} didn't answer. Is the name right, and is it a DHCP server that's up?"
     return f"{server}: {error.strip()[:300]}"
+
+
+def _json_rows(out):
+    """The JSON list the script prints last; a BOM or a warning line before it doesn't matter."""
+    for line in reversed((out or "").splitlines()):
+        text = line.strip().lstrip("\ufeff")
+        if text.startswith("["):
+            try:
+                rows = json.loads(text)
+            except ValueError:
+                return None
+            return rows if isinstance(rows, list) else None
+    return None
 
 
 def read_dhcp(servers, run=None, timeout=DHCP_TIMEOUT):
@@ -889,16 +910,14 @@ def read_dhcp(servers, run=None, timeout=DHCP_TIMEOUT):
         if isinstance(exc, subprocess.TimeoutExpired):
             return {}, f"The DHCP lookup took over {timeout // 60} minutes, so it was stopped."
         return {}, f"Couldn't run PowerShell for the DHCP lookup: {exc}"
-    try:
-        rows = json.loads(out.strip() or "[]")
-    except ValueError:
-        rows = None
+    rows = _json_rows(out)
     if code != 0 or not isinstance(rows, list):
         return {}, "The DHCP lookup failed: " + ((err or out).strip()[:300] or f"PowerShell exit code {code}")
     problems = []
     for r in rows:
         if isinstance(r, dict) and r.get("error"):
-            text = _dhcp_problem(r.get("server", "?"), str(r["error"]))
+            text = _dhcp_problem(r.get("server", "?"), str(r["error"]), str(r.get("id") or ""),
+                                 str(r.get("category") or ""))
             if text not in problems:
                 problems.append(text)
     return pick_leases([r for r in rows if isinstance(r, dict)]), " ".join(problems)

@@ -233,6 +233,56 @@ def test_dhcp_names():
     check("counts only the names it filled", named == 2, named)
 
 
+def test_dhcp_review_fixes():
+    print("DHCP: fixes from the review")
+    # A DHCP-named device on a switch whose MAC table stops reading must not turn Missing
+    settings = dict(T.DEFAULT_SETTINGS)
+    leases = {S.PRINTER: {"name": "PRN-C449", "ip": ""}}
+    day = datetime(2031, 3, 1, 10, 0)
+    results = scan()
+    devices = T.devices_from(results, S.SWITCHES, settings)
+    T.apply_dhcp(devices, leases)
+    changes, history, _ = T.compare(devices, results, {}, settings, day)
+    for n in (1, 2, 3):
+        results = [T.read_switch(S.walker(S.cisco(), fail_vlans=(10,)), S.SWITCHES[0]),
+                   T.read_switch(S.walker(S.dell()), S.SWITCHES[1])]
+        devices = T.devices_from(results, S.SWITCHES, settings)
+        T.apply_dhcp(devices, leases)
+        changes, history, _ = T.compare(devices, results, history, settings, day + timedelta(days=n))
+    check("a MAC table that can't be read doesn't make DHCP-named devices Missing",
+          history["devices"][S.PRINTER]["missed"] == 0 and not any(c["change"] == "missing" for c in changes),
+          (history["devices"][S.PRINTER], [(c["change"], c["mac"]) for c in changes]))
+
+    # Why a server failed, from the error's id and category (the message alone doesn't say)
+    real_windows = T.IS_WINDOWS
+    T.IS_WINDOWS = True
+    try:
+        def problem_for(row):
+            return T.read_dhcp(["dc2"], run=lambda a, t: (0, json.dumps([row]), ""))[1]
+        p = problem_for({"server": "dc2", "error": "Failed to enumerate scopes on DHCP server dc2.",
+                         "category": "PermissionDenied", "id": "WIN32 5,Get-DhcpServerv4Scope"})
+        check("access denied, from the error id", "can't read DHCP on dc2" in p, p)
+        p = problem_for({"server": "dc2", "error": "Failed to enumerate scopes on DHCP server dc2.",
+                         "category": "ConnectionError", "id": "WIN32 1722,Get-DhcpServerv4Scope"})
+        check("server not answering, from the error id", "dc2 didn't answer" in p, p)
+        p = problem_for({"server": "dc2", "error": "Le terme n'est pas reconnu", "category": "ObjectNotFound",
+                         "id": "CommandNotFoundException"})
+        check("RSAT missing, from the error id", "DHCP PowerShell tools" in p, p)
+
+        # A BOM or a stray warning line before the JSON doesn't lose the lookup
+        row = {"server": "dc1", "scope": "10.0.10.0", "ip": "10.0.10.5", "name": "pc9", "mac": "AA-BB-CC-00-00-09",
+               "state": "Active", "expires": "2031-03-02T10:00:00"}
+        out = "\ufeffWARNING: something about modules\r\n" + json.dumps([row]) + "\r\n"
+        leases, problem = T.read_dhcp(["dc1"], run=lambda a, t: (0, out, ""))
+        check("BOM and a warning line before the JSON are fine", problem == "" and leases["aabb.cc00.0009"]["name"] == "pc9",
+              (problem, leases))
+    finally:
+        T.IS_WINDOWS = real_windows
+    script = T._dhcp_script(["dc1"])
+    check("the script sends back the error's id and category",
+          "FullyQualifiedErrorId" in script and "CategoryInfo.Category" in script)
+
+
 def test_saving():
     print("Saving a scan")
     store = T.Store(Path(os.environ["PA_DATA_DIR"]) / "save-test")
@@ -531,6 +581,7 @@ def main():
     test_scan_job()
     test_schedule()
     test_dhcp_lookup()
+    test_dhcp_review_fixes()
     test_app()
     test_demo()
     print("\nALL PASSED" if ok else "\nSOME CHECKS FAILED")
