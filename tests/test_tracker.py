@@ -8,10 +8,12 @@ No switch is asked anything: the switches are made-up SNMP tables (tests/snmp_sa
 goes to a pretend Credential Manager.
 """
 
+import base64
 import copy
 import csv
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -210,6 +212,77 @@ def test_compare():
     check("forgotten after forget_days", "dead.beef.0001" not in newer["devices"])
 
 
+def test_dhcp_names():
+    print("Names from DHCP in a scan")
+    devices = T.devices_from(scan(), S.SWITCHES, T.DEFAULT_SETTINGS)
+    leases = {S.PRINTER: {"name": "PRN-C449", "ip": "10.0.10.99"}, S.WIN_PC: {"name": "OTHER", "ip": "10.0.10.50"},
+              S.PHONE_C: {"name": "SEPX", "ip": ""}, S.CAMERA: {"name": "CAM-B2", "ip": "10.0.20.7"},
+              S.PC_BEHIND_PHONE: {"name": "", "ip": "10.0.10.40"}}
+    named = T.apply_dhcp(devices, leases)
+    printer, camera = devices[S.PRINTER], devices[S.CAMERA]
+    check("a MAC-table-only device gets the DHCP name", printer["name"] == "PRN-C449" and printer["name_from"] == "DHCP",
+          (printer["name"], printer.get("name_from")))
+    check("its IP from ARP is kept", printer["ip"] == "10.0.10.24", printer["ip"])
+    check("no IP yet: the lease's IP fills it", camera["ip"] == "10.0.20.7" and camera["name"] == "CAM-B2", camera)
+    check("an LLDP name wins", devices[S.WIN_PC]["name"] == "DESKTOP-7Q2" and devices[S.WIN_PC]["name_from"] == "LLDP",
+          devices[S.WIN_PC])
+    check("a CDP name wins", devices[S.PHONE_C]["name"] == "SEP001122334401" and devices[S.PHONE_C]["name_from"] == "CDP")
+    behind = devices[S.PC_BEHIND_PHONE]
+    check("an empty DHCP name leaves it nameless", behind["name"] == "" and behind["name_from"] == ""
+          and behind["ip"] == "10.0.10.40", behind)
+    check("counts only the names it filled", named == 2, named)
+
+
+def test_dhcp_review_fixes():
+    print("DHCP: fixes from the review")
+    # A DHCP-named device on a switch whose MAC table stops reading must not turn Missing
+    settings = dict(T.DEFAULT_SETTINGS)
+    leases = {S.PRINTER: {"name": "PRN-C449", "ip": ""}}
+    day = datetime(2031, 3, 1, 10, 0)
+    results = scan()
+    devices = T.devices_from(results, S.SWITCHES, settings)
+    T.apply_dhcp(devices, leases)
+    changes, history, _ = T.compare(devices, results, {}, settings, day)
+    for n in (1, 2, 3):
+        results = [T.read_switch(S.walker(S.cisco(), fail_vlans=(10,)), S.SWITCHES[0]),
+                   T.read_switch(S.walker(S.dell()), S.SWITCHES[1])]
+        devices = T.devices_from(results, S.SWITCHES, settings)
+        T.apply_dhcp(devices, leases)
+        changes, history, _ = T.compare(devices, results, history, settings, day + timedelta(days=n))
+    check("a MAC table that can't be read doesn't make DHCP-named devices Missing",
+          history["devices"][S.PRINTER]["missed"] == 0 and not any(c["change"] == "missing" for c in changes),
+          (history["devices"][S.PRINTER], [(c["change"], c["mac"]) for c in changes]))
+
+    # Why a server failed, from the error's id and category (the message alone doesn't say)
+    real_windows = T.IS_WINDOWS
+    T.IS_WINDOWS = True
+    try:
+        def problem_for(row):
+            return T.read_dhcp(["dc2"], run=lambda a, t: (0, json.dumps([row]), ""))[1]
+        p = problem_for({"server": "dc2", "error": "Failed to enumerate scopes on DHCP server dc2.",
+                         "category": "PermissionDenied", "id": "WIN32 5,Get-DhcpServerv4Scope"})
+        check("access denied, from the error id", "can't read DHCP on dc2" in p, p)
+        p = problem_for({"server": "dc2", "error": "Failed to enumerate scopes on DHCP server dc2.",
+                         "category": "ConnectionError", "id": "WIN32 1722,Get-DhcpServerv4Scope"})
+        check("server not answering, from the error id", "dc2 didn't answer" in p, p)
+        p = problem_for({"server": "dc2", "error": "Le terme n'est pas reconnu", "category": "ObjectNotFound",
+                         "id": "CommandNotFoundException"})
+        check("RSAT missing, from the error id", "DHCP PowerShell tools" in p, p)
+
+        # A BOM or a stray warning line before the JSON doesn't lose the lookup
+        row = {"server": "dc1", "scope": "10.0.10.0", "ip": "10.0.10.5", "name": "pc9", "mac": "AA-BB-CC-00-00-09",
+               "state": "Active", "expires": "2031-03-02T10:00:00"}
+        out = "\ufeffWARNING: something about modules\r\n" + json.dumps([row]) + "\r\n"
+        leases, problem = T.read_dhcp(["dc1"], run=lambda a, t: (0, out, ""))
+        check("BOM and a warning line before the JSON are fine", problem == "" and leases["aabb.cc00.0009"]["name"] == "pc9",
+              (problem, leases))
+    finally:
+        T.IS_WINDOWS = real_windows
+    script = T._dhcp_script(["dc1"])
+    check("the script sends back the error's id and category",
+          "FullyQualifiedErrorId" in script and "CategoryInfo.Category" in script)
+
+
 def test_saving():
     print("Saving a scan")
     store = T.Store(Path(os.environ["PA_DATA_DIR"]) / "save-test")
@@ -284,6 +357,36 @@ def test_scan_job():
     check("saved", folder is not None and job.state == "done" and (folder / "scan.json").exists(), job.lines[-1:])
     check("history saved", len(store.history()["devices"]) > 5)
     check("progress written for the page", store.progress()["state"] == "done")
+    check("no DHCP servers: no lookup", json.loads((folder / "scan.json").read_text(encoding="utf-8"))["dhcp"] is None)
+
+    asked = []
+
+    def reader(servers):
+        asked.append(servers)
+        return {S.PRINTER: {"name": "PRN-C449", "ip": "10.0.10.99"}}, ""
+    job = analyzer.Job()
+    folder = T.run_scan(job, store, S.SWITCHES, {}, {**T.DEFAULT_SETTINGS, "dhcp_servers": "dc1"}, scan_one=fake,
+                        dhcp_reader=reader, now=datetime(2030, 1, 2, 10, 0))
+    page = json.loads((folder / "scan.json").read_text(encoding="utf-8"))
+    check("DHCP asked once, its results in the scan", asked == [["dc1"]]
+          and page["dhcp"] == {"servers": ["dc1"], "leases": 1, "named": 1, "problem": ""}, page.get("dhcp"))
+    check("the name is remembered", store.history()["devices"][S.PRINTER]["name"] == "PRN-C449")
+    header = (folder / "devices.csv").read_text(encoding="utf-8-sig").splitlines()[0].split(",")
+    check("devices.csv has Name from after Name", header[header.index("Name") + 1] == "Name from", header)
+    job = analyzer.Job()
+    folder = T.run_scan(job, store, S.SWITCHES, {}, {**T.DEFAULT_SETTINGS, "dhcp_servers": "dc1"}, scan_one=fake,
+                        dhcp_reader=lambda servers: ({}, "The DHCP lookup took over 2 minutes, so it was stopped."),
+                        now=datetime(2030, 1, 3, 10, 0))
+    check("DHCP failing: the scan still finishes and saves", job.state == "done" and folder is not None)
+    check("and says why", any(l["level"] == "warn" and "2 minutes" in l["msg"] for l in job.lines), job.lines[-3:])
+
+    def broken(servers):
+        raise RuntimeError("boom")
+    job = analyzer.Job()
+    folder = T.run_scan(job, store, S.SWITCHES, {}, {**T.DEFAULT_SETTINGS, "dhcp_servers": "dc1"}, scan_one=fake,
+                        dhcp_reader=broken, now=datetime(2030, 1, 4, 10, 0))
+    check("DHCP lookup crashing: the scan still saves", job.state == "done" and folder is not None
+          and any(l["level"] == "warn" and "boom" in l["msg"] for l in job.lines), job.lines[-3:])
 
 
 def test_schedule():
@@ -331,6 +434,21 @@ def test_app():
     try:
         check("page", client.get("/tracker", **base).status_code == 200)
         check("demo", client.get("/tracker/demo", **base).status_code == 200)
+        check("no DHCP server built in", client.get("/api/tracker/setup", **base).json["settings"]["dhcp_servers"] == "")
+        r = client.post("/api/tracker/setup", json={"dhcp_servers": "dc1,  dc2"}, **base)
+        check("DHCP servers saved", r.status_code == 200 and r.json["settings"]["dhcp_servers"] == "dc1, dc2", r.json)
+        r = client.post("/api/tracker/setup", json={"dhcp_servers": "dc1;x"}, **base)
+        check("a bad DHCP server name refused", r.status_code == 400
+              and webapp.TRACKER.settings()["dhcp_servers"] == "dc1, dc2", r.json)
+        real_read = T.read_dhcp
+        T.read_dhcp = lambda servers, **kw: ({"aabb.cc00.0001": {}, "aabb.cc00.0002": {}}, "")
+        try:
+            r = client.post("/api/tracker/dhcp-test", json={"servers": "dc1"}, **base)
+            check("Test DHCP", r.status_code == 200 and r.json == {"ok": True, "leases": 2, "problem": ""}, r.json)
+        finally:
+            T.read_dhcp = real_read
+        r = client.post("/api/tracker/dhcp-test", json={"servers": ""}, **base)
+        check("Test DHCP with no server", r.status_code == 400)
         r = client.post("/api/tracker/run", json={"version": "2c"}, **base)
         check("no login: says so", r.status_code == 400 and "community" in r.json["problems"][0], r.json)
         r = client.post("/api/tracker/setup", json={"version": "2c", "community": "right-one", "missing_after": 2}, **base)
@@ -391,16 +509,79 @@ def test_demo():
     import tracker_demo
     page = tracker_demo.run_demo()
     check("every kind of change shows", all(page["counts"][k] for k in T.CHANGES), page["counts"])
+    check("the demo shows names from DHCP", page["dhcp"]["named"] > 0
+          and any(d["name_from"] == "DHCP" for d in page["devices_list"]), page.get("dhcp"))
+
+def test_dhcp_lookup():
+    print("The DHCP lookup")
+    check("servers: commas or spaces, duplicates dropped", T.parse_servers("lgccdc1, lgccdc2 lgccdc1") == (["lgccdc1", "lgccdc2"], []),
+          T.parse_servers("lgccdc1, lgccdc2 lgccdc1"))
+    check("no servers", T.parse_servers("") == ([], []))
+    servers, problems = T.parse_servers("dc1'; rm x")
+    check("a name with a quote or ; is refused", problems and not any("'" in s or ";" in s for s in servers), (servers, problems))
+
+    def row(mac, name, state="Active", expires="2026-11-26T10:00:00", ip="10.0.10.5", server="dc1"):
+        return {"server": server, "scope": "10.0.10.0", "ip": ip, "name": name, "mac": mac, "state": state,
+                "expires": expires}
+    rows = [row("AA-BB-CC-00-00-01", "pc123.lgcc.cuny.edu"),
+            row("AA-BB-CC-00-00-02", "old-name", state="Expired"),
+            row("AA-BB-CC-00-00-03", "sooner", expires="2026-11-25T12:00:00", ip="10.0.10.31"),
+            row("AA-BB-CC-00-00-03", "later", expires="2026-11-27T12:00:00", ip="10.0.10.32"),
+            row("AA-BB-CC-00-00-04", "later", expires="2026-11-27T12:00:00"),
+            row("AA-BB-CC-00-00-04", "reserved", state="ActiveReservation", expires=""),
+            row("AA-BB-CC-00-00-05", ""),
+            row("00-01-00-01-2A-3B-4C-5D-AA-BB-CC-00-00-06", "duid-pc")]
+    seen = []
+
+    def run(args, timeout):
+        # The script goes to PowerShell base64-encoded (no quoting trouble on the command line): read it back
+        seen.append(base64.b64decode(args[args.index("-EncodedCommand") + 1]).decode("utf-16-le"))
+        return 0, json.dumps(rows), ""
+    real_windows = T.IS_WINDOWS
+    T.IS_WINDOWS = True
+    try:
+        leases, problem = T.read_dhcp(["dc1"], run=run)
+        check("lookup worked", problem == "" and "'dc1'" in seen[-1], (problem, seen[-1][:200]))
+        check("name shortened to its first part", leases["aabb.cc00.0001"]["name"] == "pc123", leases.get("aabb.cc00.0001"))
+        check("expired leases left out", "aabb.cc00.0002" not in leases)
+        check("the newest lease wins", leases["aabb.cc00.0003"]["name"] == "later"
+              and leases["aabb.cc00.0003"]["ip"] == "10.0.10.32")
+        check("a reservation beats an active lease", leases["aabb.cc00.0004"]["name"] == "reserved")
+        check("an empty host name stays empty", leases["aabb.cc00.0005"]["name"] == "")
+        check("a client id that isn't a MAC is left out", len(leases) == 4, sorted(leases))
+
+        both = rows[:1] + [{"server": "dc2", "error": "The term 'Get-DhcpServerv4Scope' is not recognized as the name of a cmdlet"}]
+        leases, problem = T.read_dhcp(["dc1", "dc2"], run=lambda a, t: (0, json.dumps(both), ""))
+        check("one server failing keeps the other's leases", "aabb.cc00.0001" in leases)
+        check("missing RSAT said plainly", "DHCP PowerShell tools" in problem, problem)
+        leases, problem = T.read_dhcp(["dc1", "dc2"], run=lambda a, t: (0, json.dumps(
+            rows[:1] + [{"server": "dc2", "error": "Failed to get ... Access is denied."}]), ""))
+        check("access denied names the server", "dc2" in problem and "aabb.cc00.0001" in leases, problem)
+
+        def slow(args, timeout):
+            raise subprocess.TimeoutExpired(args, timeout)
+        leases, problem = T.read_dhcp(["dc1"], run=slow)
+        check("too slow: no leases, says so", leases == {} and "2 minutes" in problem, problem)
+        leases, problem = T.read_dhcp(["dc1"], run=lambda a, t: (1, "", "powershell broke"))
+        check("PowerShell failing: says so", leases == {} and problem, problem)
+    finally:
+        T.IS_WINDOWS = real_windows
+    if not real_windows:
+        leases, problem = T.read_dhcp(["dc1"], run=run)
+        check("not Windows: skipped with a note", leases == {} and "Windows" in problem, problem)
 
 
 def main():
     test_reading()
     test_where()
+    test_dhcp_names()
     test_compare()
     test_saving()
     test_lock_and_login()
     test_scan_job()
     test_schedule()
+    test_dhcp_lookup()
+    test_dhcp_review_fixes()
     test_app()
     test_demo()
     print("\nALL PASSED" if ok else "\nSOME CHECKS FAILED")

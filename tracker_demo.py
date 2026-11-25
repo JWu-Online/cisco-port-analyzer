@@ -112,6 +112,20 @@ def _take(campus, key):
                     return port, d
 
 
+NAMES = {"0017.c8aa.0101": "PRN-C449-01", "3c2a.f4aa.0404": "PLOT-E3", "00e0.4caa.0909": "KIOSK-C510",
+         "accc.8e55.0047": "CAM-E3-47"}
+
+
+def _dhcp(devices):
+    """Pretend DHCP leases (the made-up server 'dhcp-demo'): most quiet devices get a name."""
+    leases = {}
+    for n, mac in enumerate(sorted(m for m, d in devices.items() if d["found_by"] == "MAC table")):
+        name = NAMES.get(mac) or (f"LGCC-PC-{n:03d}" if mac.startswith("a4bb") and n % 5 else "")
+        leases[mac] = {"name": name, "ip": f"10.0.10.{n % 250 + 2}"}
+    named = tracker.apply_dhcp(devices, leases)
+    return {"servers": ["dhcp-demo"], "leases": len(leases), "named": named, "problem": ""}
+
+
 def run_demo():
     rng = random.Random(7)
     campus = _base(rng)
@@ -140,7 +154,8 @@ def run_demo():
                         d["vlan"] = 30                    # the lab PC's port was moved to the lab VLAN
         results = _results(campus)
         devices = tracker.devices_from(results, SWITCHES + [CORE], settings)
+        dhcp = _dhcp(devices)
         changes, history, baseline = tracker.compare(devices, results, history, settings, now)
-    _summary, page = tracker.page_data(results, devices, changes, history, baseline, "scheduled", now)
+    _summary, page = tracker.page_data(results, devices, changes, history, baseline, "scheduled", now, dhcp)
     page["demo"] = True
     return page
