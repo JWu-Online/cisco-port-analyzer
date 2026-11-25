@@ -774,6 +774,117 @@ def missing_login(creds):
 
 
 # ---------------------------------------------------------------------------
+# Names from DHCP: the Windows DHCP server's leases, looked up by MAC (needs the DHCP PowerShell tools, RSAT).
+# Runs as whoever runs the scan, with their Windows login: nothing is saved.
+# ---------------------------------------------------------------------------
+_SERVER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$")
+_LEASE_STATES = ("Active", "ActiveReservation", "InactiveReservation")
+_MAC_ID = re.compile(r"^([0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2}$")
+DHCP_TIMEOUT = 120
+
+
+def parse_servers(text):
+    """'lgccdc1, lgccdc2' -> (['lgccdc1', 'lgccdc2'], problems). Only plain server names get through."""
+    servers, problems = [], []
+    for name in re.split(r"[,\s]+", str(text or "").strip()):
+        if not name:
+            continue
+        if not _SERVER.match(name):
+            problems.append(f"'{name}' isn't a server name (letters, numbers, dots and dashes only).")
+        elif name.lower() not in (s.lower() for s in servers):
+            servers.append(name)
+    return servers, problems
+
+
+def _dhcp_script(servers):
+    names = ", ".join(f"'{s}'" for s in servers)          # already checked by parse_servers: no quotes possible
+    return f"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$out = New-Object System.Collections.ArrayList
+foreach ($s in @({names})) {{
+  try {{
+    Get-DhcpServerv4Scope -ComputerName $s | Get-DhcpServerv4Lease -ComputerName $s |
+      Where-Object {{ $_.ClientId -match '^([0-9A-Fa-f]{{2}}-){{5}}[0-9A-Fa-f]{{2}}$' }} | ForEach-Object {{
+        [void]$out.Add([pscustomobject]@{{ server = $s; scope = [string]$_.ScopeId; ip = [string]$_.IPAddress;
+          name = [string]$_.HostName; mac = [string]$_.ClientId; state = [string]$_.AddressState;
+          expires = $(if ($_.LeaseExpiryTime) {{ $_.LeaseExpiryTime.ToString('s') }} else {{ '' }}) }})
+      }}
+  }} catch {{
+    [void]$out.Add([pscustomobject]@{{ server = $s; error = $_.Exception.Message }})
+  }}
+}}
+ConvertTo-Json -InputObject @($out) -Compress
+"""
+
+
+def _powershell(args, timeout):
+    import subprocess
+    flags = {"creationflags": 0x08000000} if os.name == "nt" else {}      # no window
+    r = subprocess.run(args, capture_output=True, timeout=timeout, **flags)
+    return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+
+
+def pick_leases(rows):
+    """{mac: lease} from the lookup's rows: active leases and reservations only; a reservation, else the lease
+    that runs out last, wins."""
+    best = {}
+    for r in rows:
+        if r.get("error") or r.get("state") not in _LEASE_STATES or not _MAC_ID.match(str(r.get("mac", ""))):
+            continue
+        mac = portdocs.mac_dotted(r["mac"].replace("-", "").lower())
+        lease = {"name": network.short_name(str(r.get("name") or "").strip().rstrip(".")), "ip": str(r.get("ip") or ""),
+                 "state": r["state"], "expires": str(r.get("expires") or ""), "server": str(r.get("server") or ""),
+                 "scope": str(r.get("scope") or "")}
+        rank = ("Reservation" in lease["state"], lease["expires"])
+        if mac not in best or rank > best[mac][0]:
+            best[mac] = (rank, lease)
+    return {mac: lease for mac, (_rank, lease) in best.items()}
+
+
+def _dhcp_problem(server, error):
+    low = error.lower()
+    if "is not recognized" in low or "commandnotfound" in low:
+        return "The DHCP PowerShell tools (RSAT) aren't installed on this PC, so no names came from DHCP."
+    if "access is denied" in low or "accessdenied" in low or "permission" in low:
+        return f"Your Windows account can't read DHCP on {server}."
+    return f"{server}: {error.strip()[:300]}"
+
+
+def read_dhcp(servers, run=None, timeout=DHCP_TIMEOUT):
+    """({mac: lease}, problem). Every server's active leases and reservations, by MAC. A server that fails is named
+    in the problem; the others' leases are still used."""
+    if not servers:
+        return {}, ""
+    if not IS_WINDOWS:
+        return {}, "DHCP names are only looked up on Windows."
+    run = run or _powershell
+    import base64
+    script = base64.b64encode(_dhcp_script(servers).encode("utf-16-le")).decode("ascii")     # no quoting trouble
+    args = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", script]
+    try:
+        code, out, err = run(args, timeout)
+    except Exception as exc:                                     # noqa: BLE001
+        import subprocess
+        if isinstance(exc, subprocess.TimeoutExpired):
+            return {}, f"The DHCP lookup took over {timeout // 60} minutes, so it was stopped."
+        return {}, f"Couldn't run PowerShell for the DHCP lookup: {exc}"
+    try:
+        rows = json.loads(out.strip() or "[]")
+    except ValueError:
+        rows = None
+    if code != 0 or not isinstance(rows, list):
+        return {}, "The DHCP lookup failed: " + ((err or out).strip()[:300] or f"PowerShell exit code {code}")
+    problems = []
+    for r in rows:
+        if isinstance(r, dict) and r.get("error"):
+            text = _dhcp_problem(r.get("server", "?"), str(r["error"]))
+            if text not in problems:
+                problems.append(text)
+    return pick_leases([r for r in rows if isinstance(r, dict)]), " ".join(problems)
+
+
+# ---------------------------------------------------------------------------
 # A whole scan
 # ---------------------------------------------------------------------------
 def run_scan(job, store, switches, creds, settings, source="manual", scan_one=None, now=None):

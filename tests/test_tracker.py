@@ -8,10 +8,12 @@ No switch is asked anything: the switches are made-up SNMP tables (tests/snmp_sa
 goes to a pretend Credential Manager.
 """
 
+import base64
 import copy
 import csv
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -392,6 +394,64 @@ def test_demo():
     page = tracker_demo.run_demo()
     check("every kind of change shows", all(page["counts"][k] for k in T.CHANGES), page["counts"])
 
+def test_dhcp_lookup():
+    print("The DHCP lookup")
+    check("servers: commas or spaces, duplicates dropped", T.parse_servers("lgccdc1, lgccdc2 lgccdc1") == (["lgccdc1", "lgccdc2"], []),
+          T.parse_servers("lgccdc1, lgccdc2 lgccdc1"))
+    check("no servers", T.parse_servers("") == ([], []))
+    servers, problems = T.parse_servers("dc1'; rm x")
+    check("a name with a quote or ; is refused", problems and not any("'" in s or ";" in s for s in servers), (servers, problems))
+
+    def row(mac, name, state="Active", expires="2026-11-26T10:00:00", ip="10.0.10.5", server="dc1"):
+        return {"server": server, "scope": "10.0.10.0", "ip": ip, "name": name, "mac": mac, "state": state,
+                "expires": expires}
+    rows = [row("AA-BB-CC-00-00-01", "pc123.lgcc.cuny.edu"),
+            row("AA-BB-CC-00-00-02", "old-name", state="Expired"),
+            row("AA-BB-CC-00-00-03", "sooner", expires="2026-11-25T12:00:00", ip="10.0.10.31"),
+            row("AA-BB-CC-00-00-03", "later", expires="2026-11-27T12:00:00", ip="10.0.10.32"),
+            row("AA-BB-CC-00-00-04", "later", expires="2026-11-27T12:00:00"),
+            row("AA-BB-CC-00-00-04", "reserved", state="ActiveReservation", expires=""),
+            row("AA-BB-CC-00-00-05", ""),
+            row("00-01-00-01-2A-3B-4C-5D-AA-BB-CC-00-00-06", "duid-pc")]
+    seen = []
+
+    def run(args, timeout):
+        # The script goes to PowerShell base64-encoded (no quoting trouble on the command line): read it back
+        seen.append(base64.b64decode(args[args.index("-EncodedCommand") + 1]).decode("utf-16-le"))
+        return 0, json.dumps(rows), ""
+    real_windows = T.IS_WINDOWS
+    T.IS_WINDOWS = True
+    try:
+        leases, problem = T.read_dhcp(["dc1"], run=run)
+        check("lookup worked", problem == "" and "'dc1'" in seen[-1], (problem, seen[-1][:200]))
+        check("name shortened to its first part", leases["aabb.cc00.0001"]["name"] == "pc123", leases.get("aabb.cc00.0001"))
+        check("expired leases left out", "aabb.cc00.0002" not in leases)
+        check("the newest lease wins", leases["aabb.cc00.0003"]["name"] == "later"
+              and leases["aabb.cc00.0003"]["ip"] == "10.0.10.32")
+        check("a reservation beats an active lease", leases["aabb.cc00.0004"]["name"] == "reserved")
+        check("an empty host name stays empty", leases["aabb.cc00.0005"]["name"] == "")
+        check("a client id that isn't a MAC is left out", len(leases) == 4, sorted(leases))
+
+        both = rows[:1] + [{"server": "dc2", "error": "The term 'Get-DhcpServerv4Scope' is not recognized as the name of a cmdlet"}]
+        leases, problem = T.read_dhcp(["dc1", "dc2"], run=lambda a, t: (0, json.dumps(both), ""))
+        check("one server failing keeps the other's leases", "aabb.cc00.0001" in leases)
+        check("missing RSAT said plainly", "DHCP PowerShell tools" in problem, problem)
+        leases, problem = T.read_dhcp(["dc1", "dc2"], run=lambda a, t: (0, json.dumps(
+            rows[:1] + [{"server": "dc2", "error": "Failed to get ... Access is denied."}]), ""))
+        check("access denied names the server", "dc2" in problem and "aabb.cc00.0001" in leases, problem)
+
+        def slow(args, timeout):
+            raise subprocess.TimeoutExpired(args, timeout)
+        leases, problem = T.read_dhcp(["dc1"], run=slow)
+        check("too slow: no leases, says so", leases == {} and "2 minutes" in problem, problem)
+        leases, problem = T.read_dhcp(["dc1"], run=lambda a, t: (1, "", "powershell broke"))
+        check("PowerShell failing: says so", leases == {} and problem, problem)
+    finally:
+        T.IS_WINDOWS = real_windows
+    if not real_windows:
+        leases, problem = T.read_dhcp(["dc1"], run=run)
+        check("not Windows: skipped with a note", leases == {} and "Windows" in problem, problem)
+
 
 def main():
     test_reading()
@@ -401,6 +461,7 @@ def main():
     test_lock_and_login()
     test_scan_job()
     test_schedule()
+    test_dhcp_lookup()
     test_app()
     test_demo()
     print("\nALL PASSED" if ok else "\nSOME CHECKS FAILED")
