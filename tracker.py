@@ -53,6 +53,7 @@ DEFAULT_SETTINGS = {
     "forget_days": 180,                          # a device not seen for this long is dropped from the history
     "keep_days": 90,                             # scan folders older than this are deleted
     "parallel": 10, "timeout": 3, "retries": 1,
+    "dhcp_servers": "",                          # Windows DHCP servers to name MAC-only devices from (none built in)
 }
 CHANGES = {"moved": "Moved", "new": "New", "missing": "Missing", "back": "Back", "vlan": "VLAN changed"}
 KINDS = {**lldp.KINDS, "unknown": "MAC address only"}
@@ -363,8 +364,10 @@ def devices_from(results, switches, settings):
     def add(key, info, place):
         d = devices.get(key)
         if d is None:
-            d = devices[key] = {"key": key, "mac": "", "name": "", "ip": "", "kind": "unknown", "model": "",
-                                "found_by": set(), "places": []}
+            d = devices[key] = {"key": key, "mac": "", "name": "", "name_from": "", "ip": "", "kind": "unknown",
+                                "model": "", "found_by": set(), "places": []}
+        if not d["name"] and info.get("name"):
+            d["name_from"] = info["found_by"]
         for k in ("mac", "name", "ip", "model"):
             if not d[k] and info.get(k):
                 d[k] = info[k]
@@ -421,6 +424,22 @@ def devices_from(results, switches, settings):
                                         analyzer.port_key(p["port"])))
         d["found_by"] = " + ".join(sorted(d["found_by"]))
     return devices
+
+
+def apply_dhcp(devices, leases):
+    """Name the devices only the MAC table found, from their DHCP lease (LLDP/CDP names always win), and fill an
+    empty IP from it. Returns how many names it filled."""
+    named = 0
+    for d in devices.values():
+        lease = leases.get(d["mac"]) if d["mac"] else None
+        if not lease:
+            continue
+        if not d["ip"] and lease.get("ip"):
+            d["ip"] = lease["ip"]
+        if d["found_by"] == "MAC table" and not d["name"] and lease.get("name"):
+            d["name"], d["name_from"] = lease["name"], "DHCP"
+            named += 1
+    return named
 
 
 # ---------------------------------------------------------------------------
@@ -508,7 +527,7 @@ def _parse(stamp):
 # ---------------------------------------------------------------------------
 # Saving
 # ---------------------------------------------------------------------------
-DEVICE_COLUMNS = [("MAC", "mac"), ("IP", "ip"), ("Name", "name"), ("Type", "kind_name"), ("Model", "model"),
+DEVICE_COLUMNS = [("MAC", "mac"), ("IP", "ip"), ("Name", "name"), ("Name from", "name_from"), ("Type", "kind_name"), ("Model", "model"),
                   ("Switch", "switch_name"), ("Switch address", "switch"), ("Building", "building"),
                   ("Port", "port"), ("Port description", "port_description"), ("VLAN", "vlan"),
                   ("Found by", "found_by"), ("Also seen on", "also"), ("First seen", "first_seen")]
@@ -522,7 +541,8 @@ def device_rows(devices, history):
     for key, d in devices.items():
         p = d["places"][0]
         also = [f"{q['switch_name']} {q['port']}" for q in d["places"][1:]]
-        rows.append({"key": key, "mac": d["mac"], "ip": d["ip"], "name": d["name"], "kind": d["kind"],
+        rows.append({"key": key, "mac": d["mac"], "ip": d["ip"], "name": d["name"], "name_from": d.get("name_from", ""),
+                     "kind": d["kind"],
                      "kind_name": KINDS.get(d["kind"], d["kind"]), "model": d["model"],
                      "switch_name": p["switch_name"], "switch": p["switch"], "building": p["building"],
                      "port": p["port"], "port_description": p["port_description"], "vlan": p["vlan"],
@@ -574,7 +594,7 @@ def _write(path, text):
             time.sleep(0.2)
 
 
-def page_data(results, devices, changes, history, baseline, source, now):
+def page_data(results, devices, changes, history, baseline, source, now, dhcp=None):
     """(summary for the list of scans, everything the scan's page shows)"""
     rows = device_rows(devices, history)
     crows = change_rows(changes)
@@ -585,16 +605,16 @@ def page_data(results, devices, changes, history, baseline, source, now):
     summary = {"created": now.strftime("%Y-%m-%d %H:%M"), "source": source, "switches": len(results),
                "read": len(results) - len(failed), "failed": failed, "partial": partial,
                "devices": len(rows), "counts": {k: counts.get(k, 0) for k in CHANGES}, "baseline": baseline,
-               "kinds": dict(Counter(r["kind"] for r in rows))}
+               "kinds": dict(Counter(r["kind"] for r in rows)), "dhcp": dhcp}
     page = {**summary, "devices_list": rows, "changes": crows, "change_names": CHANGES, "kind_names": KINDS,
             "switch_notes": [{"address": r["address"], "name": r["name"], "notes": r["notes"]} for r in results]}
     return summary, page
 
 
-def save_scan(scans_dir, results, devices, changes, history, baseline, source, now, log_lines=()):
+def save_scan(scans_dir, results, devices, changes, history, baseline, source, now, log_lines=(), dhcp=None):
     folder = Path(scans_dir) / now.strftime("%Y%m%d-%H%M%S")
     folder.mkdir(parents=True, exist_ok=True)
-    summary, page = page_data(results, devices, changes, history, baseline, source, now)
+    summary, page = page_data(results, devices, changes, history, baseline, source, now, dhcp)
     _write(folder / "devices.csv", csv_text(DEVICE_COLUMNS, page["devices_list"]))
     _write(folder / "changes.csv", csv_text(CHANGE_COLUMNS, page["changes"]))
     _write(folder / "scan.json", json.dumps(page))
@@ -887,7 +907,7 @@ def read_dhcp(servers, run=None, timeout=DHCP_TIMEOUT):
 # ---------------------------------------------------------------------------
 # A whole scan
 # ---------------------------------------------------------------------------
-def run_scan(job, store, switches, creds, settings, source="manual", scan_one=None, now=None):
+def run_scan(job, store, switches, creds, settings, source="manual", scan_one=None, now=None, dhcp_reader=None):
     """Read every switch, work out where each device is, compare, save. Updates `job` as it goes."""
     scan_one = scan_one or scan_switch
     job.state = "running"
@@ -933,9 +953,10 @@ def run_scan(job, store, switches, creds, settings, source="manual", scan_one=No
             return None
         now = now or datetime.now()
         devices = devices_from(results, switches, settings)
+        dhcp = _dhcp_names(job, devices, settings, dhcp_reader or read_dhcp)
         history = store.history()
         changes, history, baseline = compare(devices, results, history, settings, now)
-        folder = save_scan(store.scans, results, devices, changes, history, baseline, source, now, job.lines)
+        folder = save_scan(store.scans, results, devices, changes, history, baseline, source, now, job.lines, dhcp)
         store.save_history(history)
         pruned = prune(store.scans, settings.get("keep_days", 90), now)
         counts = Counter(c["change"] for c in changes)
@@ -957,6 +978,24 @@ def run_scan(job, store, switches, creds, settings, source="manual", scan_one=No
     finally:
         writer.set()
         store.write_progress(job, source, started)
+
+
+def _dhcp_names(job, devices, settings, reader):
+    """Look up DHCP (when servers are set) and name the MAC-only devices. None when there are no servers."""
+    servers, _problems = parse_servers(settings.get("dhcp_servers", ""))
+    if not servers:
+        return None
+    job.log(f"Looking up DHCP leases on {', '.join(servers)}...")
+    try:
+        leases, problem = reader(servers)
+    except Exception as exc:                                     # noqa: BLE001 - names are extra; the scan isn't lost
+        leases, problem = {}, f"The DHCP lookup failed: {type(exc).__name__}: {exc}"
+    named = apply_dhcp(devices, leases)
+    if leases:
+        job.log(f"DHCP: {len(leases)} leases from {', '.join(servers)}, {named} devices named.", "ok")
+    if problem:
+        job.log(f"DHCP: {problem}", "warn")
+    return {"servers": servers, "leases": len(leases), "named": named, "problem": problem}
 
 
 def _unless_stopped(job, scan_one, switch, creds, settings):

@@ -212,6 +212,27 @@ def test_compare():
     check("forgotten after forget_days", "dead.beef.0001" not in newer["devices"])
 
 
+def test_dhcp_names():
+    print("Names from DHCP in a scan")
+    devices = T.devices_from(scan(), S.SWITCHES, T.DEFAULT_SETTINGS)
+    leases = {S.PRINTER: {"name": "PRN-C449", "ip": "10.0.10.99"}, S.WIN_PC: {"name": "OTHER", "ip": "10.0.10.50"},
+              S.PHONE_C: {"name": "SEPX", "ip": ""}, S.CAMERA: {"name": "CAM-B2", "ip": "10.0.20.7"},
+              S.PC_BEHIND_PHONE: {"name": "", "ip": "10.0.10.40"}}
+    named = T.apply_dhcp(devices, leases)
+    printer, camera = devices[S.PRINTER], devices[S.CAMERA]
+    check("a MAC-table-only device gets the DHCP name", printer["name"] == "PRN-C449" and printer["name_from"] == "DHCP",
+          (printer["name"], printer.get("name_from")))
+    check("its IP from ARP is kept", printer["ip"] == "10.0.10.24", printer["ip"])
+    check("no IP yet: the lease's IP fills it", camera["ip"] == "10.0.20.7" and camera["name"] == "CAM-B2", camera)
+    check("an LLDP name wins", devices[S.WIN_PC]["name"] == "DESKTOP-7Q2" and devices[S.WIN_PC]["name_from"] == "LLDP",
+          devices[S.WIN_PC])
+    check("a CDP name wins", devices[S.PHONE_C]["name"] == "SEP001122334401" and devices[S.PHONE_C]["name_from"] == "CDP")
+    behind = devices[S.PC_BEHIND_PHONE]
+    check("an empty DHCP name leaves it nameless", behind["name"] == "" and behind["name_from"] == ""
+          and behind["ip"] == "10.0.10.40", behind)
+    check("counts only the names it filled", named == 2, named)
+
+
 def test_saving():
     print("Saving a scan")
     store = T.Store(Path(os.environ["PA_DATA_DIR"]) / "save-test")
@@ -286,6 +307,36 @@ def test_scan_job():
     check("saved", folder is not None and job.state == "done" and (folder / "scan.json").exists(), job.lines[-1:])
     check("history saved", len(store.history()["devices"]) > 5)
     check("progress written for the page", store.progress()["state"] == "done")
+    check("no DHCP servers: no lookup", json.loads((folder / "scan.json").read_text(encoding="utf-8"))["dhcp"] is None)
+
+    asked = []
+
+    def reader(servers):
+        asked.append(servers)
+        return {S.PRINTER: {"name": "PRN-C449", "ip": "10.0.10.99"}}, ""
+    job = analyzer.Job()
+    folder = T.run_scan(job, store, S.SWITCHES, {}, {**T.DEFAULT_SETTINGS, "dhcp_servers": "dc1"}, scan_one=fake,
+                        dhcp_reader=reader, now=datetime(2030, 1, 2, 10, 0))
+    page = json.loads((folder / "scan.json").read_text(encoding="utf-8"))
+    check("DHCP asked once, its results in the scan", asked == [["dc1"]]
+          and page["dhcp"] == {"servers": ["dc1"], "leases": 1, "named": 1, "problem": ""}, page.get("dhcp"))
+    check("the name is remembered", store.history()["devices"][S.PRINTER]["name"] == "PRN-C449")
+    header = (folder / "devices.csv").read_text(encoding="utf-8-sig").splitlines()[0].split(",")
+    check("devices.csv has Name from after Name", header[header.index("Name") + 1] == "Name from", header)
+    job = analyzer.Job()
+    folder = T.run_scan(job, store, S.SWITCHES, {}, {**T.DEFAULT_SETTINGS, "dhcp_servers": "dc1"}, scan_one=fake,
+                        dhcp_reader=lambda servers: ({}, "The DHCP lookup took over 2 minutes, so it was stopped."),
+                        now=datetime(2030, 1, 3, 10, 0))
+    check("DHCP failing: the scan still finishes and saves", job.state == "done" and folder is not None)
+    check("and says why", any(l["level"] == "warn" and "2 minutes" in l["msg"] for l in job.lines), job.lines[-3:])
+
+    def broken(servers):
+        raise RuntimeError("boom")
+    job = analyzer.Job()
+    folder = T.run_scan(job, store, S.SWITCHES, {}, {**T.DEFAULT_SETTINGS, "dhcp_servers": "dc1"}, scan_one=fake,
+                        dhcp_reader=broken, now=datetime(2030, 1, 4, 10, 0))
+    check("DHCP lookup crashing: the scan still saves", job.state == "done" and folder is not None
+          and any(l["level"] == "warn" and "boom" in l["msg"] for l in job.lines), job.lines[-3:])
 
 
 def test_schedule():
@@ -456,6 +507,7 @@ def test_dhcp_lookup():
 def main():
     test_reading()
     test_where()
+    test_dhcp_names()
     test_compare()
     test_saving()
     test_lock_and_login()
