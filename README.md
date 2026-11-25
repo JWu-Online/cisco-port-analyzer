@@ -182,11 +182,13 @@ Each scan is compared with what it knew before and saved as a page and two CSVs.
 
 **Scan now** runs the same scan right away. You can also double-click `TrackDevices.bat`. The app doesn't have to be open for the daily scan.
 
+**Names from DHCP** (optional): devices found only in a MAC table (printers, cameras, most PCs) have no name. Add your Windows DHCP servers under **Names from DHCP** (separated by commas; it starts empty) and click **Test**. Each scan then looks up every scope's leases on those servers (`Get-DhcpServerv4Scope | Get-DhcpServerv4Lease`) and gives each of those devices its lease's host name, shortened (`pc123.lgcc.cuny.edu` becomes `pc123`). Devices that said their own name over LLDP or CDP keep it. Only active leases and reservations count, and a device with no IP from the switches gets the lease's IP. It runs as your Windows account, so the PC needs the DHCP PowerShell tools (RSAT: DHCP Server Tools) and your account needs to be allowed to read DHCP; nothing extra is saved. If the lookup fails, the scan is still saved and says why. Devices with a static IP have no lease, so they stay without a name.
+
 **Reading a scan** (**Open** in the list):
 - **What changed**: Moved, New, Missing, Back and VLAN changed, with where each device was and where it is now. Click a box to show only that kind.
-- **Every device this scan found**: device, type, MAC, IP, switch, port, port description, VLAN, how it was found (LLDP, CDP, MAC table) and when it was first seen. Filter by building and type, or find by name, MAC (any format), IP, switch, port or VLAN.
+- **Every device this scan found**: device, where its name came from (LLDP, CDP or DHCP), type, MAC, IP, switch, port, port description, VLAN, how it was found (LLDP, CDP, MAC table) and when it was first seen. Filter by building and type, or find by name, MAC (any format), IP, switch, port or VLAN.
 - **Changes CSV**: Change, MAC, IP, Name, Type, From switch / port / VLAN, To switch / port / VLAN, Note.
-- **Devices CSV**: MAC, IP, Name, Type, Model, Switch, Switch address, Building, Port, Port description, VLAN, Found by, Also seen on, First seen.
+- **Devices CSV**: MAC, IP, Name, Name from, Type, Model, Switch, Switch address, Building, Port, Port description, VLAN, Found by, Also seen on, First seen.
 
 **How it decides:**
 - **Where a device is**: the port where it said who it is, otherwise the port where its MAC was learned. MACs on a port that leads to another switch or an access point are only passing through, so they're skipped. So is a port with more MACs than the busy port limit (40), which is most likely an uplink that didn't say so. A device is known by its MAC address, or by its name when it only sent a name (a Cisco access point over CDP).

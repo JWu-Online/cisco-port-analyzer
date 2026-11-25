@@ -384,6 +384,21 @@ def test_app():
     try:
         check("page", client.get("/tracker", **base).status_code == 200)
         check("demo", client.get("/tracker/demo", **base).status_code == 200)
+        check("no DHCP server built in", client.get("/api/tracker/setup", **base).json["settings"]["dhcp_servers"] == "")
+        r = client.post("/api/tracker/setup", json={"dhcp_servers": "dc1,  dc2"}, **base)
+        check("DHCP servers saved", r.status_code == 200 and r.json["settings"]["dhcp_servers"] == "dc1, dc2", r.json)
+        r = client.post("/api/tracker/setup", json={"dhcp_servers": "dc1;x"}, **base)
+        check("a bad DHCP server name refused", r.status_code == 400
+              and webapp.TRACKER.settings()["dhcp_servers"] == "dc1, dc2", r.json)
+        real_read = T.read_dhcp
+        T.read_dhcp = lambda servers, **kw: ({"aabb.cc00.0001": {}, "aabb.cc00.0002": {}}, "")
+        try:
+            r = client.post("/api/tracker/dhcp-test", json={"servers": "dc1"}, **base)
+            check("Test DHCP", r.status_code == 200 and r.json == {"ok": True, "leases": 2, "problem": ""}, r.json)
+        finally:
+            T.read_dhcp = real_read
+        r = client.post("/api/tracker/dhcp-test", json={"servers": ""}, **base)
+        check("Test DHCP with no server", r.status_code == 400)
         r = client.post("/api/tracker/run", json={"version": "2c"}, **base)
         check("no login: says so", r.status_code == 400 and "community" in r.json["problems"][0], r.json)
         r = client.post("/api/tracker/setup", json={"version": "2c", "community": "right-one", "missing_after": 2}, **base)
@@ -444,6 +459,8 @@ def test_demo():
     import tracker_demo
     page = tracker_demo.run_demo()
     check("every kind of change shows", all(page["counts"][k] for k in T.CHANGES), page["counts"])
+    check("the demo shows names from DHCP", page["dhcp"]["named"] > 0
+          and any(d["name_from"] == "DHCP" for d in page["devices_list"]), page.get("dhcp"))
 
 def test_dhcp_lookup():
     print("The DHCP lookup")

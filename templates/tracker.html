@@ -127,6 +127,24 @@
       </section>
     </div>
 
+    <section class="panel stack" aria-labelledby="dhcpTitle">
+      <div class="panel-head">
+        <h2 id="dhcpTitle">Names from DHCP</h2>
+        <p>Devices found only in a MAC table have no name. Add your Windows DHCP servers and each scan looks up their
+          leases by MAC address and uses the lease's host name (devices that said their own name over LLDP or CDP keep
+          it). It runs as your Windows account, so this PC needs the DHCP PowerShell tools (RSAT) and your account needs
+          to be allowed to read DHCP. Leave it empty to turn it off.</p>
+      </div>
+      <div class="test-row">
+        <label class="field"><span>DHCP servers <em>(separate with commas)</em></span>
+          <input id="dhcp_servers" autocomplete="off" spellcheck="false" placeholder="lgccdc1, lgccdc2"></label>
+        <button class="btn primary" id="saveDhcp" type="button">Save</button>
+        <button class="btn" id="testDhcp" type="button">Test</button>
+      </div>
+      <p class="test-result" id="dhcpResult" aria-live="polite"></p>
+      <div class="notice" id="dhcpNotes" hidden></div>
+    </section>
+
     <section class="panel" aria-labelledby="runsTitle">
       <div class="panel-head">
         <h2 id="runsTitle">Scans</h2>
@@ -439,6 +457,29 @@
       if (r.ok) $("#historyHint").textContent = "";
     }
 
+    // ---- names from DHCP ----
+    async function saveDhcp() {
+      var r = await api("/api/tracker/setup", { dhcp_servers: $("#dhcp_servers").value });
+      if (!r.ok) { notice($("#dhcpNotes"), "error", r.data.problems || ["Couldn't save."]); return; }
+      state.setup.settings = r.data.settings;
+      $("#dhcp_servers").value = r.data.settings.dhcp_servers;
+      $("#dhcpResult").textContent = "";
+      notice($("#dhcpNotes"), "", [r.data.settings.dhcp_servers ? "Saved. The next scan looks up names on " +
+        r.data.settings.dhcp_servers + "." : "Saved. No DHCP lookup."]);
+    }
+    async function testDhcp() {
+      $("#testDhcp").disabled = true;
+      $("#dhcpResult").textContent = "Asking DHCP…";
+      notice($("#dhcpNotes"), "", []);
+      var r = await api("/api/tracker/dhcp-test", { servers: $("#dhcp_servers").value });
+      $("#testDhcp").disabled = false;
+      $("#dhcpResult").textContent = "";
+      if (r.data.problems) { notice($("#dhcpNotes"), "error", r.data.problems); return; }
+      if (r.data.leases) $("#dhcpResult").textContent = "It answered: " + plural(r.data.leases, "lease", "leases") + " with a MAC address.";
+      if (r.data.problem) notice($("#dhcpNotes"), r.data.leases ? "warn" : "error", [r.data.problem]);
+      else if (!r.data.leases) $("#dhcpResult").textContent = "It answered, but with no leases.";
+    }
+
     async function init() {
       var data = (await api("/api/state")).data || {};
       state.switches = data.switches || [];
@@ -449,6 +490,7 @@
       (setup.priv || []).forEach(function (a) { $("#priv_protocol").appendChild(el("option", { value: a }, a === "none" ? "None" : a)); });
       FIELDS.forEach(function (k) { if (set[k] !== undefined) $("#" + k).value = set[k]; });
       $("#time").value = set.time || "10:00";
+      $("#dhcp_servers").value = set.dhcp_servers || "";
       $("#days").value = set.days || "daily";
       showOptions(set);
       showVersion();
@@ -486,6 +528,8 @@
     $("#runBtn").addEventListener("click", start);
     $("#stopBtn").addEventListener("click", function () { $("#stopBtn").disabled = true; api("/api/tracker/stop", {}); });
     $("#saveOptions").addEventListener("click", saveOptions);
+    $("#saveDhcp").addEventListener("click", saveDhcp);
+    $("#testDhcp").addEventListener("click", testDhcp);
     $("#resetBtn").addEventListener("click", reset);
     init();
   })();

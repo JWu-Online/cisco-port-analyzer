@@ -40,6 +40,8 @@
     table.t td.wrap { white-space: normal; min-width: 160px; }
     table.t tr[hidden] { display: none; }
     .muted { color: var(--ink-3); }
+    .from-tag { margin-left: 6px; font-size: 0.72rem; font-weight: 600; color: var(--ink-3); border: 1px solid var(--line);
+                border-radius: 8px; padding: 0 5px; }
     .mono { font-family: var(--mono); font-size: 0.82rem; }
     .arrow { color: var(--ink-3); padding: 0 2px; }
     .empty-filter { padding: 22px; text-align: center; color: var(--ink-3); }
@@ -106,8 +108,8 @@
       <p class="shown" id="dShown"></p>
       <div class="tbl-wrap">
         <table class="t" id="devices">
-          <thead><tr><th scope="col">Device</th><th scope="col">Type</th><th scope="col">MAC</th><th scope="col">IP</th>
-            <th scope="col">Switch</th><th scope="col">Port</th><th scope="col">Port description</th><th scope="col">VLAN</th>
+          <thead><tr><th scope="col">Device</th><th scope="col">Name from</th><th scope="col">Type</th><th scope="col">MAC</th>
+            <th scope="col">IP</th><th scope="col">Switch</th><th scope="col">Port</th><th scope="col">Port description</th><th scope="col">VLAN</th>
             <th scope="col">Found by</th><th scope="col">First seen</th></tr></thead>
           <tbody></tbody>
         </table>
@@ -153,7 +155,8 @@
     // ---- heading ----
     var how = D.source === "scheduled" ? "the daily scan" : "scanned by hand";
     $("#subtitle").textContent = D.created + " (" + how + ") · " + D.read + " of " + plural(D.switches, "switch", "switches") +
-      " read · " + plural(D.devices, "device", "devices");
+      " read · " + plural(D.devices, "device", "devices") +
+      (D.dhcp && D.dhcp.named ? " · " + plural(D.dhcp.named, "name", "names") + " from DHCP" : "");
     var notes = $("#notes");
     function notice(kind, lines) {
       var box = el("div", { "class": "notice " + kind, style: "margin-top:8px" });
@@ -166,6 +169,7 @@
       D.failed.forEach(function (f) { ul.appendChild(el("li", {}, (f.name !== f.address ? f.name + " (" + f.address + ")" : f.address) + ": " + f.problem)); });
       notice("error", [plural(D.failed.length, "switch wasn't", "switches weren't") + " read, so the devices on them weren't counted as missing:", ul]);
     }
+    if (D.dhcp && D.dhcp.problem) notice("warn", ["Names from DHCP: " + D.dhcp.problem]);
     if (D.partial && D.partial.length) {
       var ul2 = el("ul", { "class": "switch-notes" });
       D.partial.forEach(function (f) { ul2.appendChild(el("li", {}, (f.name !== f.address ? f.name + " (" + f.address + ")" : f.address) + ": " + f.problem)); });
@@ -192,6 +196,8 @@
       });
       tiles.appendChild(b);
     });
+    var NAME_FROM = {};
+    D.devices_list.forEach(function (d) { NAME_FROM[d.key] = d.name_from; });
     var cBody = $("#changes tbody");
     var cRows = D.changes.map(function (c) {
       var tr = el("tr");
@@ -199,7 +205,9 @@
       chip.appendChild(el("i", { "class": "dot c-" + c.change, "aria-hidden": "true" }));
       chip.appendChild(document.createTextNode(c.change_name));
       var td = el("td"); td.appendChild(chip); tr.appendChild(td);
-      tr.appendChild(c.name ? el("td", { "class": "wrap" }, c.name) : el("td", { "class": "wrap muted" }, c.model || "no name"));
+      var who = c.name ? el("td", { "class": "wrap" }, c.name) : el("td", { "class": "wrap muted" }, c.model || "no name");
+      if (c.name && NAME_FROM[c.key] === "DHCP") who.appendChild(el("span", { "class": "from-tag", title: "Name from DHCP" }, "DHCP"));
+      tr.appendChild(who);
       tr.appendChild(el("td", {}, c.kind_name));
       tr.appendChild(el("td", { "class": "mono" }, c.mac));
       tr.appendChild(el("td", { "class": "mono" }, c.ip));
@@ -240,6 +248,7 @@
     function deviceRow(d) {
       var tr = el("tr");
       tr.appendChild(d.name ? el("td", { "class": "wrap" }, d.name) : el("td", { "class": "wrap muted" }, d.model || "no name"));
+      tr.appendChild(el("td", { "class": "muted" }, d.name_from || ""));
       tr.appendChild(el("td", {}, d.kind_name));
       tr.appendChild(el("td", { "class": "mono" }, d.mac));
       tr.appendChild(el("td", { "class": "mono" }, d.ip));
@@ -256,7 +265,7 @@
       var q = $("#q").value.trim(), b = bSel.value, k = kSel.value;
       var hits = D.devices_list.filter(function (d) {
         return (b === "*" || (d.building || "") === b) && (!k || d.kind === k) &&
-          matches(q, [d.name, d.mac, d.ip, d.switch_name, d.switch, d.port, d.port_description, "vlan " + d.vlan, d.model,
+          matches(q, [d.name, d.name_from, d.mac, d.ip, d.switch_name, d.switch, d.port, d.port_description, "vlan " + d.vlan, d.model,
                       d.kind_name, d.found_by, d.building, d.also], d.mac);
       });
       dBody.textContent = "";

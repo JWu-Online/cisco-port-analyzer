@@ -790,6 +790,10 @@ def tracker_setup_save():
         value = _int_setting(payload, key, low, high, problems, label)
         if value is not None:
             settings[key] = value
+    if "dhcp_servers" in payload:
+        servers, bad = tracker.parse_servers(payload.get("dhcp_servers"))
+        problems += bad
+        settings["dhcp_servers"] = ", ".join(servers)
     if problems:
         return jsonify({"ok": False, "problems": problems}), 400
     TRACKER.save_settings(settings)
@@ -825,6 +829,16 @@ def tracker_test():
     if problems:
         return jsonify({"ok": False, "problems": problems}), 400
     return jsonify(tracker.test_switch(chosen[0], creds, settings))
+
+
+@app.post("/api/tracker/dhcp-test")
+def tracker_dhcp_test():
+    """Ask the DHCP servers typed in the page for their leases, as the Windows user running the app."""
+    servers, problems = tracker.parse_servers((request.json or {}).get("servers"))
+    if problems or not servers:
+        return jsonify({"ok": False, "problems": problems or ["Enter a DHCP server name."]}), 400
+    leases, problem = tracker.read_dhcp(servers)
+    return jsonify({"ok": bool(leases) or not problem, "leases": len(leases), "problem": problem})
 
 
 @app.post("/api/tracker/run")
